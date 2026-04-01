@@ -21,7 +21,7 @@ import dataclasses
 
 @dataclass
 class PathConfig:
-    project_root: Path = Path("D:/HDD/Project/DL")
+    project_root: Path = Path(__file__).resolve().parent.parent
 
     @property
     def raw_dir(self) -> Path:
