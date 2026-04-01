@@ -1,0 +1,70 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── Virtual Environments ────────────────────────────────
+.venv/
+venv/
+env/
+.conda/
+
+# ── IDE ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Data (too large for git) ────────────────────────────
+data/raw/
+data/processed/
+data/splits/
+*.jsonl
+*.parquet
+*.npy
+*.pkl
+*.h5
+
+# ── Models (too large for git) ──────────────────────────
+models/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+
+# ── Logs ────────────────────────────────────────────────
+logs/
+*.log
+wandb/
+
+# ── Outputs ─────────────────────────────────────────────
+outputs/
+
+# ── Temp (project temp files, backups, old scripts) ─────
+temp/
+
+# ── OS ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Secrets ─────────────────────────────────────────────
+.env
+*.key
+
+# ── Jupyter ─────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Scraping artifacts (keep scraping code, ignore data) 
+scraping/**/*.bak
+scraping/**/*.bak.jsonl
+
+# ── Antigravity agent (keep workflows, ignore brain) ────
+.gemini/

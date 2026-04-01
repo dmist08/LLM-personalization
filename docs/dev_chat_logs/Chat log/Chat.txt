@@ -1,0 +1,328 @@
+-Tell me how can we use RAG based personalisation in our model, Also consider it as our baseline 2. I just want to add it as baseline on base model, not on fine tuned one.
+Okay now I have completed HT and TOI scraping and here is its scraping summary, I want to start with next phase of the project, help me start it but first breifly tell me what are next phase?
+
+Understand everything and then tell me what we require to start next phase, also tell me do we need GEMINI Api to run on LaMP 4 also, as it contains so many articles and API credits might get finished on that only.
+
+Let me read the scraping summary first.Good. Now I have everything. Let me give you the full picture.
+
+---
+
+## Dataset: What You Have
+
+**9,919 total articles, 43 authors, zero duplicates. This is solid.**
+
+**HT — 6,601 articles, 25 authors:**
+- 18 authors with 100–618 articles each → these are **rich** authors
+- 7 authors with 13–48 articles each (Rezaul H Laskar, Shivya Kanojia, Nisheeth Upadhyay, Shamik Banerjee, Shishir Gupta, Samreen Razzaqui, Santanu Das, Kartikay Dutta) → these are your **sparse** cold-start test authors
+- Date range 2021–2026, avg 755 words. Good quality.
+
+**TOI — 3,318 articles, 18 authors:**
+- All 18 authors have 137–385 articles each → all **rich**
+- Trisha Mahajan only has 28 → borderline sparse
+- Date range 2015–2026, avg 585 words. Good.
+
+**The cold-start test set you have:**
+
+| Author | Source | Articles | Role |
+|---|---|---|---|
+| Rezaul H Laskar | HT | 19 | Sparse |
+| Shivya Kanojia | HT | 15 | Sparse |
+| Nisheeth Upadhyay | HT | 13 | Sparse |
+| Shamik Banerjee | HT | 20 | Sparse |
+| Shishir Gupta | HT | 23 | Borderline sparse |
+| Samreen Razzaqui | HT | 24 | Borderline sparse |
+| Santanu Das | HT | 30 | Borderline sparse |
+| Kartikay Dutta | HT | 32 | Borderline sparse |
+
+You have 4–8 sparse Indian journalists depending on your threshold. That's workable for the cold-start demonstration.
+
+---
+
+## Next Phases Overview
+
+**Week 2 (Now) — Data Pipeline:**
+Split your scraped data into train/val/test per author. Generate style-agnostic headlines using Gemini Flash for every article. Save everything to disk. This is all CPU work, no GPU needed.
+
+**Week 3 — QLoRA Fine-Tuning:**
+Fine-tune LLaMA-3.1-8B-Instruct on LaMP-4 with author-conditioned prompts on Lightning AI L4. ~10 hours. Checkpoint to HuggingFace Hub.
+
+**Week 4 — Style Vector Extraction:**
+For every article: run the fine-tuned model on (article + real headline) and (article + agnostic headline), extract hidden states at layer ℓ, compute the difference. Average per author = style vector. ~12 hours on Lightning AI.
+
+**Week 5 — Cold-Start + Evaluation:**
+PCA → KMeans on rich-author vectors. Interpolate for sparse authors. Run all 4 methods and build the result table.
+
+**Week 6 — Deployment:**
+FastAPI + React + HuggingFace Spaces + Vercel + CI/CD.
+
+---
+
+## The Gemini API Question — Critical Answer
+
+**Yes, you need Gemini for LaMP-4 too, and this is a real bottleneck you must plan for.**
+
+LaMP-4 News Headline Generation has 2,376 users × 287 articles average = ~682,000 article-headline pairs. You need to generate one agnostic headline per article using Gemini Flash. That's up to 682,000 API calls.
+
+**But you don't need all of them.** Here's the practical approach:
+
+For QLoRA training (Week 3), you only need the article bodies and real headlines — no Gemini calls required at all. The training prompt is just `"Write a headline in the style of {user_id}: {article}"` → `{real_headline}`. Gemini is not involved in training.
+
+For style vector extraction (Week 4), you need agnostic headlines for the rich authors you're actually using. If you use 200 LaMP-4 rich authors (≥50 articles each, ~50 articles per author on average for the extraction step), that's about 10,000 Gemini calls. At 15 requests/minute free tier, that's ~11 hours of API calls. With a paid tier ($0.075 per 1M input tokens for Flash), 10,000 short articles costs roughly $0.50. Very cheap.
+
+**For your Indian dataset:** 6,600 HT + 3,318 TOI = ~10,000 articles. Another ~10,000 calls. Same cost.
+
+**Total: ~20,000 Gemini calls across the whole project.** Free tier can handle this over 1–2 days (15 req/min = 900/hour = 21,600/day). You don't need paid tier unless you want it done in a few hours instead of a day.
+
+---
+
+## What You Need to Start Week 2 Right Now
+
+**1. Gemini API key** — Get from Google AI Studio (aistudio.google.com). Free, takes 2 minutes.
+
+**2. LaMP-4 dataset downloaded** — Your notebook 01_dataset.ipynb already has the download code. Run it now if you haven't. The data lands in `data/lamp4/`.
+
+**3. Three scripts to write (this is what I'll give you next):**
+- `src/pipeline/split_dataset.py` — chronological train/val/test split for your Indian data
+- `src/pipeline/agnostic_gen.py` — calls Gemini Flash on every article, saves `agnostic_headlines.csv`
+- `src/pipeline/validate_data.py` — checks every record has author, headline, body, date before proceeding
+
+**4. For RAG baseline specifically:** you only need `rank-bm25` installed and the Indian dataset already scraped. RAG runs on the base model (not fine-tuned), exactly as you said. It needs no GPU — just BM25 retrieval + model inference at evaluation time.
+
+Tell me which of these three scripts you want first and I'll write it. Or if you want all three at once I can do that too.
+
+- Okay now I have completed HT and TOI scraping and here is its scraping summary, I want to start with next phase of the project, help me start it but first breifly tell me what are next phase?
+
+Good data. Let me read the numbers carefully before telling you anything.Good scraping. Here's what the numbers mean and what comes next.
+
+---
+
+## What You Have
+
+**33 rich authors** (100+ articles each) — used for style vector computation and clustering
+**10 sparse authors** (11–99 articles) — your cold-start test targets
+**10,215 total articles**, all dated, clean
+
+This is enough. The sparse pool of 10 authors is on the smaller side but workable. If you need more sparse authors later, The Hindu and India Today are still available.
+
+One data quality note: TOI has articles going back to 2000. Those old articles will have very different writing style from 2025 articles for the same author. You should filter TOI to **post-2015 only** during data cleaning to keep style signals consistent.
+
+---
+
+## The Next Three Phases
+
+**Phase 2 (this week) — Data Pipeline + Agnostic Headlines**
+Clean and split your scraped data chronologically. Then run Gemini Flash on every training article to generate style-agnostic headlines. These are the "negative" side of your contrastive pairs. This is pure CPU/API work — no GPU needed.
+
+**Phase 3 (next week) — QLoRA Fine-Tuning on Lightning AI**
+Fine-tune LLaMA-3.1-8B on LaMP-4 with author-conditioned prompts. Upload checkpoint to HuggingFace Hub. This satisfies the course training requirement.
+
+**Phase 4 (week after) — Activation Extraction + Cold-Start**
+Load the fine-tuned model on Lightning AI. Extract hidden state differences for every article-headline pair. Compute style vectors. Run PCA + KMeans clustering. Apply cold-start interpolation for sparse authors. Evaluate all 4 methods.
+
+---
+
+## Start Phase 2 Now?
+
+Say yes and I'll give you the full data pipeline notebook — cleaning, filtering, chronological splits, and the Gemini agnostic headline generation script, all ready to run.
+
+-In phase 4 we are using the finetuned model, not original model? why?
+Don't we need to compare the results with generaic output?
+Good catch. Let me be precise about this.
+
+---
+
+## Which Model Is Used Where
+
+**For activation extraction (computing style vectors):** Yes, the fine-tuned model. Not the base model.
+
+**For generating the agnostic/generic headlines (Mg):** Gemini Flash. A completely separate model. This never changes.
+
+These are two different things and you're conflating them.
+
+---
+
+## Why the Fine-Tuned Model for Extraction
+
+The style vector is computed as:
+
+```
+v_u = mean(h_pos - h_neg)
+
+where:
+h_pos = hidden state when model sees (article + real_headline)
+h_neg = hidden state when model sees (article + agnostic_headline)
+```
+
+The agnostic headline in `h_neg` was already generated by Gemini in Phase 2. It's just a string sitting in your CSV. You're not running Gemini again during extraction.
+
+The question is: which model's hidden states do you extract from?
+
+If you use the **base model**, its internal representations don't know anything about individual journalist styles. The difference `h_pos - h_neg` captures some signal but it's noisy — the model wasn't trained to care about user identities.
+
+If you use the **fine-tuned model**, it has learned to associate user IDs with stylistic patterns during training. Its internal representations are organized around style. The difference `h_pos - h_neg` captures a much cleaner style signal because the model already knows user_1042 writes differently from user_0871.
+
+This is the whole point of doing Phase 3 before Phase 4.
+
+---
+
+## Where Generic Output Fits Into Comparison
+
+Your confusion is understandable — "generic output" appears in two different places in the project and they mean different things.
+
+**Generic output #1 — Gemini agnostic headlines (Phase 2):**
+Used as the negative side of the contrastive pair during style vector computation. This is an input to the extraction process, not a baseline method.
+
+**Generic output #2 — No Personalization baseline (Phase 4 evaluation):**
+You take the fine-tuned model, give it an article with NO user ID in the prompt, and let it generate a headline. This is your Baseline 1 in the evaluation table. It shows what the model produces without any style steering.
+
+So the comparison in your evaluation table is:
+
+| Method | What happens |
+|---|---|
+| No Personalization | Fine-tuned model, no style vector injected |
+| RAG | Fine-tuned model, past examples in prompt |
+| StyleVector | Fine-tuned model + style vector injected at layer ℓ |
+| Cold-Start StyleVector | Fine-tuned model + cold-start vector injected at layer ℓ |
+
+**The fine-tuned model is the foundation for all four methods.** The difference between them is only what extra information you give it at inference time. This is intentional — it isolates the effect of style personalization from differences in base model capability.
+
+If you used the base model for some methods and the fine-tuned model for others, you wouldn't know if differences in results came from personalization or from the model being better at headline generation in general.
+
+-Give me alternative for Gemini, not paid API as out task is for both the dataset, Also why can't we use lamma 3 8b, our base model?
+
+## Free Alternatives to Gemini
+
+First, context on scale: you have ~7,000 training articles (70% of 9,963 rich author articles). You need one agnostic headline per article. That's 7,000 API calls.
+
+| Option | Free Limit | Speed | Verdict |
+|---|---|---|---|
+| Gemini Flash | 1,500/day free | Fast | Takes 5 days at free limit |
+| **Groq API** | **14,400/day free** | **Very fast** | **Done in 1 day** |
+| HuggingFace Inference API | ~100/day free | Slow | Too slow |
+| Together AI | $1 free credit | Fast | Runs out quickly |
+
+**Groq is the best free option.** Sign up at `console.groq.com`, get a free API key, and it gives you access to LLaMA-3.1-8B at 14,400 requests/day for free. At 7,000 articles you finish in one run.
+
+```python
+from groq import Groq
+
+client = Groq(api_key="your_groq_key")
+
+def generate_agnostic_headline(article_body):
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": f"Generate a neutral, factual headline for this article. No style, no creativity, just the main point.\n\nArticle: {article_body[:1500]}\n\nHeadline:"
+        }],
+        max_tokens=60,
+        temperature=0.1,
+    )
+    return response.choices[0].message.content.strip()
+```
+
+---
+
+## Can We Use LLaMA-3.1-8B as Mg?
+
+Yes, and it's actually a good idea — with one important condition.
+
+You must use the **base model** (pre-fine-tuning), not the fine-tuned model. Here's why:
+
+After fine-tuning, your model has learned style associations — it knows user_1042 writes a certain way. If you use the fine-tuned model to generate agnostic headlines, those headlines may carry residual style from training. The "agnostic" baseline is no longer truly style-free, and your contrastive difference `h_pos - h_neg` is polluted.
+
+The base model has no style associations at all — it will generate the same generic headline regardless of which journalist's article you feed it. That's exactly what you want for the negative side of the contrastive pair.
+
+**Practical setup:**
+
+```python
+# Load BASE model (no fine-tuning) for agnostic headline generation
+# This runs locally on Lightning AI — no API needed, no rate limits
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+import torch
+
+base_model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    torch_dtype=torch.float16,
+    device_map="auto",
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "meta-llama/Meta-Llama-3.1-8B-Instruct"
+)
+
+pipe = pipeline(
+    "text-generation",
+    model=base_model,
+    tokenizer=tokenizer,
+)
+
+def generate_agnostic_headline(article_body):
+    prompt = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+Generate a neutral, factual headline for this article. Be direct, no style.
+
+Article: {article_body[:1500]}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+Headline:"""
+
+    out = pipe(prompt, max_new_tokens=50, temperature=0.1, do_sample=False)
+    generated = out[0]["generated_text"].split("Headline:")[-1].strip()
+    return generated.split("\n")[0].strip()
+```
+
+**The advantage over Groq:** No API rate limits. You run it on Lightning AI L4, generate all 7,000 agnostic headlines in one batch job in ~2 hours, save to CSV, done. No waiting across multiple days.
+
+**The disadvantage:** Costs Lightning AI compute time (~2h on L4 = ~2.4 credits). If you want to save credits, use Groq for free and spread it over one day.
+
+---
+
+## Recommendation
+
+Use the **base LLaMA-3.1-8B on Lightning AI** to generate all agnostic headlines in one batch during Phase 2. It's free of API limits, consistent, and keeps everything self-contained. Run it the same session before you start fine-tuning — the base model is already downloaded at that point anyway.
+
+-cold_start_stylevector_documentation.docx
+docx
+
+
+COLD_START_STYLEVECTOR_PROJECT.md
+md
+
+
+COLD_START_STYLEVECTOR_PROJECT_V2.md
+md
+
+
+scraping_summary.txt
+txt
+
+Personalised Text Generation with Activation Steering.pdf
+pdf
+
+
+lamp4_summary.txt
+79 lines
+
+txt
+
+I completed the scraping of HT and TOI articles. Help me Phase 2, as the GEMINI api call are so costly. Look at the summary of both the datasets, now help me if using GEMINI is mandatory or we are just doing as it is written in research paper. Keep the response short
+
+## ⚠️ REVIEW
+
+**Gemini is NOT mandatory.** You picked it following the paper's choice of GPT-3.5-turbo, but the paper explicitly states in Section 3.1:
+
+> *"It does not necessarily need to be the same as the personalized large model M; it can be any model, whether open-source or closed-source."*
+
+And Appendix C.2 directly tests multiple Mg options — including **LLaMA-2-7b itself** — and shows StyleVector is robust across all of them. A more powerful model helps slightly with diversity, but it's not required.
+
+## 🧭 APPROACH
+
+Your cheapest options, ranked:
+
+1. **Use LLaMA-3.1-8B-Instruct itself as Mg** — same model you're already loading for style vector extraction. Zero extra API cost, zero extra model download. The paper validates this works. This is your best option.
+
+2. **Use a local Qwen2.5-7B or Mistral-7B** — slightly different model family, possibly better style-agnostic outputs, still free.
+
+3. **Use Gemini Flash (not Pro)** — if you want an external API, Flash is ~10–20x cheaper than Pro. But given option 1 works, this is unnecessary.
+
+## ➡️ NEXT STEP
+
+Change `generic_model` in your `StyleVectorConfig` to point to `LLaMA-3.1-8B-Instruct` and drop the Gemini dependency entirely. When you run the style-agnostic generation pass, just feed the article text with a neutral prompt like `"Generate a headline for the following article: {article}"` — no user history, no style context. That's all Mg needs to do.
