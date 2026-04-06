@@ -195,7 +195,7 @@ class GPUTracker:
             if torch.cuda.is_available():
                 snap.gpu_name = torch.cuda.get_device_name(0)
                 props = torch.cuda.get_device_properties(0)
-                snap.gpu_memory_total_gb = props.total_mem / 1e9
+                snap.gpu_memory_total_gb = props.total_memory / 1e9
                 snap.gpu_memory_used_gb = torch.cuda.memory_allocated(0) / 1e9
                 snap.gpu_memory_pct = (
                     snap.gpu_memory_used_gb / snap.gpu_memory_total_gb * 100

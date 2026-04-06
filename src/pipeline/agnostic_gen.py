@@ -112,7 +112,7 @@ class AgnosticHeadlineGenerator:
         ]
 
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            with torch.autocast("cuda"):
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=40,
@@ -252,7 +252,6 @@ def main():
     log.info("=" * 60)
 
     # GPU tracking
-    tracker = GPUTracker("agnostic_gen", cfg.paths.logs_dir / ".." / "logs" / "gpu_tracking")
     tracker = GPUTracker("agnostic_gen")
     tracker.start()
 
