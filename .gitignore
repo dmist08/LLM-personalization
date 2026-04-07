@@ -39,13 +39,20 @@ models/
 *.safetensors
 *.gguf
 
+# BUT allow LoRA adapter (small, ~70MB, needed for reproducibility)
+!checkpoints/qlora/final/**
+
 # ── Logs ────────────────────────────────────────────────
 logs/
 *.log
 wandb/
+# BUT keep GPU tracking reports (small, needed for paper)
+!logs/gpu_tracking/
 
 # ── Outputs ─────────────────────────────────────────────
 outputs/
+# BUT keep evaluation results (small, needed for paper)
+!outputs/evaluation/
 
 # ── Temp (project temp files, backups, old scripts) ─────
 temp/
