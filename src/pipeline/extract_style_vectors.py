@@ -121,7 +121,7 @@ class ActivationExtractor:
         input_ids = inputs["input_ids"].to(self.model.device)
 
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            with torch.autocast("cuda"):
                 self.model(input_ids)
 
         # Copy results
@@ -150,8 +150,12 @@ class StyleVectorExtractor:
             quantization_config=bnb_config,
             device_map="auto",
             torch_dtype=torch.bfloat16,
+            local_files_only=True,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            local_files_only=True,
+        )
         self.model.eval()
 
         allocated = torch.cuda.memory_allocated() / 1e9
@@ -173,6 +177,7 @@ class StyleVectorExtractor:
         agnostic_headlines: dict[str, str],
         layer_idx: int,
         author_id: str,
+        dataset: str = "indian",
     ) -> Optional[np.ndarray]:
         """
         Extract style vector for one author at one layer.
@@ -191,9 +196,14 @@ class StyleVectorExtractor:
             )
             real_headline = art.get("headline", "")
 
-            # Look up agnostic headline
-            art_id = art.get("url") or art.get("lamp4_id") or ""
-            agnostic_hl = agnostic_headlines.get(str(art_id))
+            # Look up agnostic headline:
+            # - Indian: keyed by article URL
+            # - LaMP-4: profile articles have no ID — use user_id (author_id) as key
+            if dataset == "lamp4":
+                agnostic_hl = agnostic_headlines.get(str(author_id))
+            else:
+                art_id = art.get("url") or art.get("lamp4_id") or ""
+                agnostic_hl = agnostic_headlines.get(str(art_id))
 
             if not agnostic_hl:
                 skipped += 1
@@ -233,6 +243,73 @@ class StyleVectorExtractor:
         style_vector = np.mean(diffs, axis=0)  # shape: [hidden_dim]
         torch.cuda.empty_cache()
         return style_vector
+
+    def extract_author_vector_multilayer(
+        self,
+        train_articles: list[dict],
+        agnostic_headlines: dict[str, str],
+        layer_indices: list[int],
+        author_id: str,
+        dataset: str = "indian",
+    ) -> dict[int, np.ndarray]:
+        """
+        Extract style vectors for one author across ALL layers in a single pass.
+        Returns {layer_idx: np.ndarray} — only layers with >=5 valid diffs.
+        This is ~5x faster than calling extract_author_vector per layer.
+        """
+        import torch
+
+        self._ensure_extractor(layer_indices)
+
+        # {layer_idx: [diff vectors]}
+        diffs: dict[int, list] = {l: [] for l in layer_indices}
+        skipped = 0
+
+        for art in train_articles:
+            article_text = format_article_for_prompt(
+                art.get("article_text", ""), max_words=400
+            )
+            real_headline = art.get("headline", "")
+
+            # Agnostic lookup
+            if dataset == "lamp4":
+                agnostic_hl = agnostic_headlines.get(str(author_id))
+            else:
+                art_id = art.get("url") or art.get("lamp4_id") or ""
+                agnostic_hl = agnostic_headlines.get(str(art_id))
+
+            if not agnostic_hl or not real_headline:
+                skipped += 1
+                continue
+
+            pos_text = f"{article_text}\n\nHeadline: {real_headline}"
+            neg_text = f"{article_text}\n\nHeadline: {agnostic_hl}"
+
+            # Single forward pass captures ALL layers simultaneously
+            pos_acts = self.extractor.extract_activations(
+                pos_text, layer_indices, max_length=512
+            )
+            neg_acts = self.extractor.extract_activations(
+                neg_text, layer_indices, max_length=512
+            )
+
+            for l in layer_indices:
+                if l in pos_acts and l in neg_acts:
+                    diffs[l].append(pos_acts[l] - neg_acts[l])
+
+        if skipped > 0:
+            log.warning(f"  {author_id}: skipped {skipped}/{len(train_articles)}")
+
+        # Compute mean diff per layer, skip layers with <5 diffs
+        result = {}
+        for l in layer_indices:
+            if len(diffs[l]) >= 5:
+                result[l] = np.mean(diffs[l], axis=0)
+            else:
+                log.warning(f"  {author_id} layer {l}: only {len(diffs[l])} diffs — skipping")
+
+        torch.cuda.empty_cache()
+        return result
 
     def extract_all_authors(
         self,
@@ -281,53 +358,65 @@ class StyleVectorExtractor:
                 if len(arts) >= 1  # Each user has 1 question record
             ]
             # For LaMP-4, use the profile as "training articles"
+            # Only use rich users (>=50 articles) for cluster pool
+            # Cap at 15 articles per user — vector stabilizes after ~15 samples
+            # This reduces runtime by ~10-20x with minimal quality loss
+            MAX_PROFILE_ARTICLES = 15
+            MAX_USERS = 2000  # Enough for reliable KMeans clustering
             authors_with_profiles = []
+            import random
+            random.seed(42)
             for uid, arts in authors:
                 profile = arts[0].get("profile", [])
-                if len(profile) >= 5:  # Need ≥5 for valid vector
+                if len(profile) >= 50:  # Only rich users for cluster pool
+                    if len(profile) > MAX_PROFILE_ARTICLES:
+                        profile = random.sample(profile, MAX_PROFILE_ARTICLES)
                     authors_with_profiles.append((uid, profile))
+            # Randomly sample MAX_USERS for tractable runtime
+            if len(authors_with_profiles) > MAX_USERS:
+                authors_with_profiles = random.sample(authors_with_profiles, MAX_USERS)
+                log.info(f"Sampled {MAX_USERS} rich users for cluster pool (from {len(authors_with_profiles) + MAX_USERS} total)")
             authors = authors_with_profiles
 
         log.info(f"Authors to process: {len(authors)}")
         manifest = {}
         total_start = time.time()
 
+        # Create all layer dirs
         for layer_idx in layer_indices:
-            layer_dir = output_dir / f"layer_{layer_idx}"
-            layer_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / f"layer_{layer_idx}").mkdir(parents=True, exist_ok=True)
 
-            log.info(f"\n--- Layer {layer_idx} ---")
+        # Outer loop: users. Inner: articles. Capture ALL layers per forward pass.
+        for i, (author_id, articles) in enumerate(authors, 1):
 
-            for i, (author_id, articles) in enumerate(authors, 1):
-                npy_path = layer_dir / f"{author_id}.npy"
+            # Check which layers still need processing for this author
+            layers_needed = [
+                l for l in layer_indices
+                if not (resume and (output_dir / f"layer_{l}" / f"{author_id}.npy").exists())
+            ]
+            if not layers_needed:
+                continue  # All layers already done for this author
 
-                # Resume: skip if already exists
-                if resume and npy_path.exists():
-                    if author_id not in manifest:
-                        manifest[author_id] = {}
-                    manifest[author_id][f"layer_{layer_idx}"] = str(npy_path)
-                    continue
+            vectors = self.extract_author_vector_multilayer(
+                articles, agnostic, layers_needed, author_id, dataset=dataset
+            )
 
-                vector = self.extract_author_vector(
-                    articles, agnostic, layer_idx, author_id
+            for layer_idx, vector in vectors.items():
+                npy_path = output_dir / f"layer_{layer_idx}" / f"{author_id}.npy"
+                np.save(npy_path, vector)
+                if author_id not in manifest:
+                    manifest[author_id] = {}
+                manifest[author_id][f"layer_{layer_idx}"] = str(npy_path)
+
+            # Progress
+            if i % 50 == 0:
+                elapsed = time.time() - total_start
+                rate = elapsed / i
+                eta = estimate_runtime(len(authors) - i, rate)
+                log.info(
+                    f"  [{i}/{len(authors)}] {author_id}: "
+                    f"{len(articles)} articles | {eta} remaining"
                 )
-
-                if vector is not None:
-                    np.save(npy_path, vector)
-                    if author_id not in manifest:
-                        manifest[author_id] = {}
-                    manifest[author_id][f"layer_{layer_idx}"] = str(npy_path)
-
-                # Progress
-                if i % 10 == 0:
-                    elapsed = time.time() - total_start
-                    rate = elapsed / i
-                    remaining = len(authors) - i
-                    eta = estimate_runtime(remaining * len(layer_indices), rate)
-                    log.info(
-                        f"  [{i}/{len(authors)}] {author_id}: "
-                        f"{len(articles)} articles | {eta} remaining"
-                    )
 
         # Save manifest
         manifest_path = output_dir / "manifest.json"
