@@ -4,14 +4,15 @@ src/pipeline/stylevector_inference.py — Activation-steered headline generation
 Uses pre-computed style vectors to steer LLaMA's hidden states during generation.
 This produces personalized headlines using vanilla StyleVector (no cold-start).
 
-RUN:
+RUN (Indian):
   python -m src.pipeline.stylevector_inference \
     --model-path checkpoints/qlora/merged \
-    --layer 21 \
-    --alpha 0.5 \
-    --test-dir data/processed/indian \
-    --vectors-dir author_vectors/indian \
-    --output-path outputs/stylevector_outputs.jsonl
+    --dataset indian
+
+RUN (LaMP-4):
+  python -m src.pipeline.stylevector_inference \
+    --model-path checkpoints/qlora/merged \
+    --dataset lamp4
 
 OUTPUT:
   outputs/stylevector_outputs.jsonl
@@ -53,14 +54,44 @@ PROMPT_TEMPLATE = (
 )
 
 
-def load_test_records(test_dir: str) -> list[dict]:
-    """Load all test records from all_test.jsonl."""
-    test_path = Path(test_dir) / "all_test.jsonl"
+# Dataset-specific config
+DATASET_CONFIG = {
+    "indian": {
+        "test_file": "all_test.jsonl",
+        "test_dir": "data/processed/indian",
+        "vectors_dir": "author_vectors/indian",
+        "output_file": "outputs/stylevector_outputs.jsonl",
+        "id_field": "author_id",       # field name in the JSONL
+        "class_field": "author_class",
+        "article_field": "article_text",
+        "headline_field": "headline",
+        "article_id_field": "url",
+    },
+    "lamp4": {
+        "test_file": "val.jsonl",       # test.jsonl has NO ground truth
+        "test_dir": "data/processed/lamp4",
+        "vectors_dir": "author_vectors/lamp4",
+        "output_file": "outputs/stylevector_lamp4_outputs.jsonl",
+        "id_field": "user_id",
+        "class_field": "user_class",
+        "article_field": "article_text",
+        "headline_field": "headline",
+        "article_id_field": "lamp4_id",
+    },
+}
+
+
+def load_test_records(test_dir: str, test_file: str) -> list[dict]:
+    """Load test/val records."""
+    test_path = Path(test_dir) / test_file
     records = []
     with open(test_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                records.append(json.loads(line))
+                rec = json.loads(line)
+                # Skip records without ground truth
+                if rec.get("headline"):
+                    records.append(rec)
     return records
 
 
@@ -143,12 +174,22 @@ def generate_with_steering(
 def main():
     parser = argparse.ArgumentParser(description="StyleVector Inference")
     parser.add_argument("--model-path", required=True)
+    parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4"])
     parser.add_argument("--layer", type=int, default=21)
     parser.add_argument("--alpha", type=float, default=0.5)
-    parser.add_argument("--test-dir", default="data/processed/indian")
-    parser.add_argument("--vectors-dir", default="author_vectors/indian")
-    parser.add_argument("--output-path", default="outputs/stylevector_outputs.jsonl")
+    parser.add_argument("--test-dir", default=None)     # Override dataset default
+    parser.add_argument("--vectors-dir", default=None)   # Override dataset default
+    parser.add_argument("--output-path", default=None)   # Override dataset default
     args = parser.parse_args()
+
+    # Apply dataset-specific defaults
+    ds = DATASET_CONFIG[args.dataset]
+    if args.test_dir is None:
+        args.test_dir = ds["test_dir"]
+    if args.vectors_dir is None:
+        args.vectors_dir = ds["vectors_dir"]
+    if args.output_path is None:
+        args.output_path = ds["output_file"]
 
     Path("logs").mkdir(exist_ok=True)
     output_path = Path(args.output_path)
@@ -158,14 +199,15 @@ def main():
     tracker = GPUTracker("stylevector_inference")
     tracker.start()
 
-    # Resume support: load already-processed (author_id, url) pairs
+    # Resume support
+    id_field = ds["id_field"]
     done_ids: set[tuple[str, str]] = set()
     if output_path.exists():
         with open(output_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     r = json.loads(line)
-                    done_ids.add((r["author_id"], r.get("article_id", r.get("url", ""))))
+                    done_ids.add((r["author_id"], r.get("article_id", "")))
         log.info(f"Resuming: {len(done_ids)} already done")
 
     # Load model
@@ -186,8 +228,8 @@ def main():
     tracker.snapshot("model_loaded")
 
     # Load test records
-    records = load_test_records(args.test_dir)
-    log.info(f"Test records: {len(records)}")
+    records = load_test_records(args.test_dir, ds["test_file"])
+    log.info(f"Dataset: {args.dataset} | Records with ground truth: {len(records)}")
 
     out_f = open(output_path, "a", encoding="utf-8")
     written = 0
@@ -196,8 +238,8 @@ def main():
     start_time = time.time()
 
     for i, rec in enumerate(records):
-        author_id = rec["author_id"]
-        article_id = rec.get("url", str(i))
+        author_id = str(rec[id_field])
+        article_id = str(rec.get(ds["article_id_field"], i))
 
         if (author_id, article_id) in done_ids:
             continue
@@ -207,8 +249,8 @@ def main():
             skipped_no_vector += 1
             continue
 
-        article = rec.get("article_text", "")
-        ground_truth = rec.get("headline", "")
+        article = rec.get(ds["article_field"], "")
+        ground_truth = rec.get(ds["headline_field"], "")
 
         try:
             headline = generate_with_steering(
@@ -221,10 +263,11 @@ def main():
 
         result = {
             "author_id": author_id,
-            "author_class": rec.get("author_class", ""),
+            "author_class": rec.get(ds["class_field"], ""),
             "article_id": article_id,
             "ground_truth": ground_truth,
             "sv_output": headline,
+            "dataset": args.dataset,
             "layer": args.layer,
             "alpha": args.alpha,
         }

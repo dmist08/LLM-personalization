@@ -4,14 +4,15 @@ src/pipeline/cold_start_inference.py — Cold-start interpolated headline genera
 Uses cold-start interpolated style vectors (from PCA+KMeans centroid blending)
 for activation-steered headline generation. This is the NOVEL CONTRIBUTION.
 
-RUN:
+RUN (Indian):
   python -m src.pipeline.cold_start_inference \
     --model-path checkpoints/qlora/merged \
-    --layer 21 \
-    --alpha 0.5 \
-    --test-dir data/processed/indian \
-    --cold-start-dir author_vectors/cold_start/alpha_0.5 \
-    --output-path outputs/cold_start_outputs.jsonl
+    --dataset indian
+
+RUN (LaMP-4):
+  python -m src.pipeline.cold_start_inference \
+    --model-path checkpoints/qlora/merged \
+    --dataset lamp4
 
 OUTPUT:
   outputs/cold_start_outputs.jsonl
@@ -53,14 +54,43 @@ PROMPT_TEMPLATE = (
 )
 
 
-def load_test_records(test_dir: str) -> list[dict]:
-    """Load all test records."""
-    test_path = Path(test_dir) / "all_test.jsonl"
+# Dataset-specific config
+DATASET_CONFIG = {
+    "indian": {
+        "test_file": "all_test.jsonl",
+        "test_dir": "data/processed/indian",
+        "cold_start_dir": "author_vectors/cold_start/alpha_0.5",
+        "output_file": "outputs/cold_start_outputs.jsonl",
+        "id_field": "author_id",
+        "class_field": "author_class",
+        "article_field": "article_text",
+        "headline_field": "headline",
+        "article_id_field": "url",
+    },
+    "lamp4": {
+        "test_file": "val.jsonl",       # test.jsonl has NO ground truth
+        "test_dir": "data/processed/lamp4",
+        "cold_start_dir": "author_vectors/cold_start_lamp4/alpha_0.5",
+        "output_file": "outputs/cold_start_lamp4_outputs.jsonl",
+        "id_field": "user_id",
+        "class_field": "user_class",
+        "article_field": "article_text",
+        "headline_field": "headline",
+        "article_id_field": "lamp4_id",
+    },
+}
+
+
+def load_test_records(test_dir: str, test_file: str) -> list[dict]:
+    """Load test/val records."""
+    test_path = Path(test_dir) / test_file
     records = []
     with open(test_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                records.append(json.loads(line))
+                rec = json.loads(line)
+                if rec.get("headline"):
+                    records.append(rec)
     return records
 
 
@@ -136,12 +166,22 @@ def generate_with_steering(
 def main():
     parser = argparse.ArgumentParser(description="Cold-Start Inference")
     parser.add_argument("--model-path", required=True)
+    parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4"])
     parser.add_argument("--layer", type=int, default=21)
     parser.add_argument("--alpha", type=float, default=0.5)
-    parser.add_argument("--test-dir", default="data/processed/indian")
-    parser.add_argument("--cold-start-dir", default="author_vectors/cold_start/alpha_0.5")
-    parser.add_argument("--output-path", default="outputs/cold_start_outputs.jsonl")
+    parser.add_argument("--test-dir", default=None)
+    parser.add_argument("--cold-start-dir", default=None)
+    parser.add_argument("--output-path", default=None)
     args = parser.parse_args()
+
+    # Apply dataset-specific defaults
+    ds = DATASET_CONFIG[args.dataset]
+    if args.test_dir is None:
+        args.test_dir = ds["test_dir"]
+    if args.cold_start_dir is None:
+        args.cold_start_dir = ds["cold_start_dir"]
+    if args.output_path is None:
+        args.output_path = ds["output_file"]
 
     Path("logs").mkdir(exist_ok=True)
     output_path = Path(args.output_path)
@@ -152,6 +192,7 @@ def main():
     tracker.start()
 
     # Resume support
+    id_field = ds["id_field"]
     done_ids: set[tuple[str, str]] = set()
     if output_path.exists():
         with open(output_path, encoding="utf-8") as f:
@@ -179,8 +220,8 @@ def main():
     tracker.snapshot("model_loaded")
 
     # Load test records
-    records = load_test_records(args.test_dir)
-    log.info(f"Test records: {len(records)}")
+    records = load_test_records(args.test_dir, ds["test_file"])
+    log.info(f"Dataset: {args.dataset} | Records with ground truth: {len(records)}")
 
     # Check available cold-start vectors
     cs_dir = Path(args.cold_start_dir)
@@ -194,8 +235,8 @@ def main():
     start_time = time.time()
 
     for i, rec in enumerate(records):
-        author_id = rec["author_id"]
-        article_id = rec.get("url", str(i))
+        author_id = str(rec[id_field])
+        article_id = str(rec.get(ds["article_id_field"], i))
 
         if (author_id, article_id) in done_ids:
             continue
@@ -205,8 +246,8 @@ def main():
             skipped += 1
             continue
 
-        article = rec.get("article_text", "")
-        ground_truth = rec.get("headline", "")
+        article = rec.get(ds["article_field"], "")
+        ground_truth = rec.get(ds["headline_field"], "")
 
         try:
             headline = generate_with_steering(
@@ -219,10 +260,11 @@ def main():
 
         result = {
             "author_id": author_id,
-            "author_class": rec.get("author_class", ""),
+            "author_class": rec.get(ds["class_field"], ""),
             "article_id": article_id,
             "ground_truth": ground_truth,
             "cs_output": headline,
+            "dataset": args.dataset,
             "layer": args.layer,
             "alpha": args.alpha,
         }
