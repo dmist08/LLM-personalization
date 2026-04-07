@@ -70,7 +70,7 @@ DATASET_CONFIG = {
     "lamp4": {
         "test_file": "val.jsonl",       # test.jsonl has NO ground truth
         "test_dir": "data/processed/lamp4",
-        "vectors_dir": "author_vectors/lamp4",
+        "vectors_dir": "author_vectors/lamp4_val",  # val-user vectors (NOT lamp4/)
         "output_file": "outputs/stylevector_lamp4_outputs.jsonl",
         "id_field": "user_id",
         "class_field": "user_class",

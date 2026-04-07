@@ -70,7 +70,7 @@ DATASET_CONFIG = {
     "lamp4": {
         "test_file": "val.jsonl",       # test.jsonl has NO ground truth
         "test_dir": "data/processed/lamp4",
-        "cold_start_dir": "author_vectors/cold_start_lamp4/alpha_0.5",
+        "cold_start_dir": "author_vectors/cold_start_lamp4/alpha_0.5",  # interpolated val vectors
         "output_file": "outputs/cold_start_lamp4_outputs.jsonl",
         "id_field": "user_id",
         "class_field": "user_class",
