@@ -89,9 +89,8 @@ def format_training_text(record: dict) -> str:
         article = " ".join(words[:800])
     headline = record.get("headline", "")
     return (
-        f"Write a headline in the style of {user_id}:\n\n"
-        f"{article}\n\n"
-        f"Headline: {headline}{tokenizer.eos_token}"
+        f"Generate a concise news headline for the following article:\n\n"
+        f"{article}\n\nHeadline: {headline}{tokenizer.eos_token}"
     )
 
 log.info("Formatting datasets...")
@@ -269,7 +268,7 @@ for sample in val_samples:
     user_id     = sample.get("user_id", "unknown")
     article     = " ".join(sample.get("article_text", "").split()[:200])
     gt_headline = sample.get("headline", "N/A")
-    prompt = f"Write a headline in the style of {user_id}:\n\n{article}\n\nHeadline:"
+    prompt = f"Generate a concise news headline for the following article:\n\n{article}\n\nHeadline:"
     output = generator(prompt, max_new_tokens=30, do_sample=False,
                        pad_token_id=tokenizer.eos_token_id)
     gen_text = output[0]["generated_text"][len(prompt):].strip().split("\n")[0].strip()

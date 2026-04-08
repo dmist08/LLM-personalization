@@ -212,13 +212,14 @@ def main():
 
     # Load model
     log.info(f"Loading model from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True)
+    is_local = Path(args.model_path).exists()
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=is_local)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
-        local_files_only=True,
+        local_files_only=is_local,
         quantization_config=BitsAndBytesConfig(load_in_8bit=True),
         device_map="auto",
         torch_dtype=torch.float16,

@@ -50,6 +50,11 @@ from src.utils import (
 )
 from src.utils_gpu import GPUTracker
 
+PROMPT_TEMPLATE = (
+    "Generate a concise news headline for the following article:\n\n"
+    "{article}\n\nHeadline:"
+)
+
 cfg = get_config()
 log = setup_logging("extract_sv", cfg.paths.logs_dir)
 
@@ -145,16 +150,17 @@ class StyleVectorExtractor:
         log.info(f"Loading merged model: {model_path}")
 
         bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        is_local = Path(model_path).exists()
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             quantization_config=bnb_config,
             device_map="auto",
             torch_dtype=torch.bfloat16,
-            local_files_only=True,
+            local_files_only=is_local,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
-            local_files_only=True,
+            local_files_only=is_local,
         )
         self.model.eval()
 
@@ -213,8 +219,9 @@ class StyleVectorExtractor:
                 continue
 
             # Build positive and negative texts
-            pos_text = f"{article_text}\n\nHeadline: {real_headline}"
-            neg_text = f"{article_text}\n\nHeadline: {agnostic_hl}"
+            prompt = PROMPT_TEMPLATE.format(article=article_text)
+            pos_text = f"{prompt} {real_headline}"
+            neg_text = f"{prompt} {agnostic_hl}"
 
             # Extract activations
             pos_acts = self.extractor.extract_activations(
@@ -282,8 +289,9 @@ class StyleVectorExtractor:
                 skipped += 1
                 continue
 
-            pos_text = f"{article_text}\n\nHeadline: {real_headline}"
-            neg_text = f"{article_text}\n\nHeadline: {agnostic_hl}"
+            prompt = PROMPT_TEMPLATE.format(article=article_text)
+            pos_text = f"{prompt} {real_headline}"
+            neg_text = f"{prompt} {agnostic_hl}"
 
             # Single forward pass captures ALL layers simultaneously
             pos_acts = self.extractor.extract_activations(
