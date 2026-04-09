@@ -35,7 +35,7 @@ log = setup_logging("qlora_finetune", Path("logs"))
 # ── Config ────────────────────────────────────────────────────────────────────
 MODEL_NAME             = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 OUTPUT_DIR             = Path("./checkpoints/qlora")
-TRAIN_FILE             = Path("data/processed/lamp4/train.jsonl")
+TRAIN_FILE             = Path("data/splits/hybrid_train.jsonl")    # Changed to merged Hybrid Data
 VAL_FILE               = Path("data/processed/lamp4/val.jsonl")
 RESUME_FROM_CHECKPOINT = False   # Set True to resume after crash
 
