@@ -23,7 +23,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = (
-    "Summarize this article as a headline:\n\n{article}\n\nHeadline:"
+    "Generate a concise news headline for the following article:\n\n{article}\n\nHeadline:"
 )
 
 def load_test_records(test_dir):
@@ -52,13 +52,14 @@ def main():
         log.info(f"Resuming: {len(done_ids)} already done")
 
     log.info(f"Loading model from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True)
+    local_files = Path(args.model_path).exists()
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=local_files)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
-        local_files_only=True,
+        local_files_only=local_files,
         quantization_config=BitsAndBytesConfig(load_in_8bit=True),
         device_map="auto",
         torch_dtype=torch.float16,
