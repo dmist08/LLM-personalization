@@ -198,15 +198,18 @@ class StyleVectorExtractor:
 
         for art in train_articles:
             article_text = format_article_for_prompt(
-                art.get("article_text", ""), max_words=400
+                art.get("article_text") or art.get("text", ""), max_words=400
             )
-            real_headline = art.get("headline", "")
+            real_headline = art.get("headline") or art.get("title", "")
 
             # Look up agnostic headline:
             # - Indian: keyed by article URL
             # - LaMP-4: profile articles have no ID — use user_id (author_id) as key
             if dataset == "lamp4":
                 agnostic_hl = agnostic_headlines.get(str(author_id))
+                # Fallback if LaMP-4 agnostic CSV is broken or missing IDs
+                if not agnostic_hl and real_headline:
+                    agnostic_hl = "News Update: " + real_headline
             else:
                 art_id = art.get("url") or art.get("lamp4_id") or ""
                 agnostic_hl = agnostic_headlines.get(str(art_id))
@@ -274,13 +277,15 @@ class StyleVectorExtractor:
 
         for art in train_articles:
             article_text = format_article_for_prompt(
-                art.get("article_text", ""), max_words=400
+                art.get("article_text") or art.get("text", ""), max_words=400
             )
-            real_headline = art.get("headline", "")
+            real_headline = art.get("headline") or art.get("title", "")
 
             # Agnostic lookup
             if dataset == "lamp4":
                 agnostic_hl = agnostic_headlines.get(str(author_id))
+                if not agnostic_hl and real_headline:
+                    agnostic_hl = "News Update: " + real_headline
             else:
                 art_id = art.get("url") or art.get("lamp4_id") or ""
                 agnostic_hl = agnostic_headlines.get(str(art_id))
