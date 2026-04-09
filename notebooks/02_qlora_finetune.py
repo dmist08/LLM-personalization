@@ -39,9 +39,9 @@ TRAIN_FILE             = Path("data/splits/hybrid_train.jsonl")    # Changed to 
 VAL_FILE               = Path("data/processed/lamp4/val.jsonl")
 RESUME_FROM_CHECKPOINT = False   # Set True to resume after crash
 
-MAX_SEQ_LENGTH         = 2048
+MAX_SEQ_LENGTH         = 4096
 BATCH_SIZE             = 8
-GRAD_ACCUM             = 4       # effective batch = 32
+GRAD_ACCUM             = 2       # effective batch = 16
 LR                     = 2e-4
 NUM_EPOCHS             = 2
 SAVE_STEPS             = 500
@@ -85,8 +85,8 @@ def format_training_text(record: dict) -> str:
     user_id  = record.get("user_id", "unknown")
     article  = record.get("article_text", "")
     words    = article.split()
-    if len(words) > 800:
-        article = " ".join(words[:800])
+    if len(words) > 2500:
+        article = " ".join(words[:2500])
     headline = record.get("headline", "")
     return (
         f"Generate a concise news headline for the following article:\n\n"

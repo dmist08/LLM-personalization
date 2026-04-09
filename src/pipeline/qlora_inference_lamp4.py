@@ -22,7 +22,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = (
-    "Summarize this article as a headline:\n\n{article}\n\nHeadline:"
+    "Generate a concise news headline for the following article:\n\n{article}\n\nHeadline:"
 )
 
 def load_val_records(val_path):
