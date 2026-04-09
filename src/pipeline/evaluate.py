@@ -183,6 +183,7 @@ class Evaluator:
         method_labels = {
             "base": "No personalization",
             "rag": "RAG (BM25)",
+            "qlora": "QLoRA (Fine-tuned)",
             "stylevector": "StyleVector (vanilla)",
             "cold_start": "Cold-Start StyleVector",
         }
@@ -385,6 +386,10 @@ def main():
         default=str(cfg.paths.outputs_dir / "cold_start_outputs.jsonl"),
     )
     parser.add_argument(
+        "--qlora-outputs",
+        default=str(cfg.paths.outputs_dir / "qlora_outputs.jsonl"),
+    )
+    parser.add_argument(
         "--metadata",
         default=str(cfg.paths.indian_processed_dir / "author_metadata.json"),
     )
@@ -412,6 +417,7 @@ def main():
     rag_path = Path(args.rag_outputs)
     sv_path = Path(args.sv_outputs)
     cs_path = Path(args.cs_outputs)
+    qlora_path = Path(args.qlora_outputs)
 
     if rag_path.exists():
         rag_records = load_jsonl(rag_path)
@@ -450,6 +456,16 @@ def main():
         )
     else:
         log.info(f"Cold-Start outputs not found (OK if not yet generated): {cs_path}")
+
+    if qlora_path.exists():
+        qlora_records = load_jsonl(qlora_path)
+        log.info(f"\nQLoRA outputs: {len(qlora_records):,} records")
+        log.info("Evaluating: QLoRA (Fine-tuned)")
+        results["qlora"] = evaluator.evaluate_method(
+            qlora_records, "qlora_output", metadata
+        )
+    else:
+        log.info(f"QLoRA outputs not found (OK if not yet generated): {qlora_path}")
 
     if not results:
         log.error("No output files found — nothing to evaluate!")
