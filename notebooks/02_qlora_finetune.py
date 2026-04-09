@@ -39,9 +39,9 @@ TRAIN_FILE             = Path("data/splits/hybrid_train.jsonl")    # Changed to 
 VAL_FILE               = Path("data/processed/lamp4/val.jsonl")
 RESUME_FROM_CHECKPOINT = False   # Set True to resume after crash
 
-MAX_SEQ_LENGTH         = 1024
-BATCH_SIZE             = 4
-GRAD_ACCUM             = 8       # effective batch = 32
+MAX_SEQ_LENGTH         = 2048
+BATCH_SIZE             = 8
+GRAD_ACCUM             = 4       # effective batch = 32
 LR                     = 2e-4
 NUM_EPOCHS             = 2
 SAVE_STEPS             = 500
@@ -49,7 +49,7 @@ WARMUP_RATIO           = 0.03
 LORA_RANK              = 16
 LORA_ALPHA             = 32
 LORA_DROPOUT           = 0.1
-MAX_TRAIN_SAMPLES      = 25000
+MAX_TRAIN_SAMPLES      = 50000
 LORA_TARGET_MODULES    = [
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
