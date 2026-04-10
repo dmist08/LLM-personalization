@@ -70,6 +70,7 @@ class Evaluator:
 
         rouge_scores = []
         meteor_scores = []
+        bleu_scores = []
         n_empty = 0
 
         for pred, ref in zip(predictions, references):
@@ -94,9 +95,20 @@ class Evaluator:
             except Exception:
                 pass
 
+            # BLEU
+            try:
+                from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+                from nltk import word_tokenize
+                smoothie = SmoothingFunction().method1
+                bleu = sentence_bleu([word_tokenize(ref)], word_tokenize(pred), smoothing_function=smoothie)
+                bleu_scores.append(bleu)
+            except Exception:
+                pass
+
         result = {
             "rouge_l": round(float(np.mean(rouge_scores)), 4) if rouge_scores else 0.0,
             "meteor": round(float(np.mean(meteor_scores)), 4) if meteor_scores else 0.0,
+            "bleu": round(float(np.mean(bleu_scores)), 4) if bleu_scores else 0.0,
             "n_samples": len(rouge_scores),
             "n_empty": n_empty,
         }
@@ -156,7 +168,7 @@ class Evaluator:
         for group_name, pairs in groups.items():
             if not pairs:
                 results[group_name] = {
-                    "rouge_l": 0.0, "meteor": 0.0,
+                    "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0,
                     "bert_score_f1": 0.0, "n_samples": 0, "n_empty": 0,
                 }
                 continue
@@ -189,16 +201,16 @@ class Evaluator:
         }
 
         header = (
-            f"{'Method':<26} │ {'All':^18} │ {'Rich':^18} │ {'Sparse':^18} │\n"
-            f"{'':26} │ {'RL':>5} {'MET':>5} {'BS':>6} │ "
-            f"{'RL':>5} {'MET':>5} {'BS':>6} │ "
-            f"{'RL':>5} {'MET':>5} {'BS':>6} │"
+            f"{'Method':<26} │ {'All':^23} │ {'Rich':^23} │ {'Sparse':^23} │\n"
+            f"{'':26} │ {'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │ "
+            f"{'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │ "
+            f"{'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │"
         )
 
         lines = []
-        lines.append("┌" + "─" * 26 + "┬" + "─" * 20 + "┬" + "─" * 20 + "┬" + "─" * 20 + "┐")
+        lines.append("┌" + "─" * 26 + "┬" + "─" * 25 + "┬" + "─" * 25 + "┬" + "─" * 25 + "┐")
         lines.append(header)
-        lines.append("├" + "─" * 26 + "┼" + "─" * 20 + "┼" + "─" * 20 + "┼" + "─" * 20 + "┤")
+        lines.append("├" + "─" * 26 + "┼" + "─" * 25 + "┼" + "─" * 25 + "┼" + "─" * 25 + "┤")
 
         for method_key in methods:
             label = method_labels.get(method_key, method_key)
@@ -209,13 +221,14 @@ class Evaluator:
                 g = r.get(group, {})
                 rl = g.get("rouge_l", 0)
                 met = g.get("meteor", 0)
+                bleu = g.get("bleu", 0)
                 bs = g.get("bert_score_f1", 0)
-                row_parts.append(f"{rl:>.3f} {met:>.3f} {bs:>.4f}")
+                row_parts.append(f"{rl:>.3f} {met:>.3f} {bleu:>.3f} {bs:>.3f}")
 
-            line = f"│ {label:<24} │ {row_parts[0]:<18} │ {row_parts[1]:<18} │ {row_parts[2]:<18} │"
+            line = f"│ {label:<24} │ {row_parts[0]:<23} │ {row_parts[1]:<23} │ {row_parts[2]:<23} │"
             lines.append(line)
 
-        lines.append("└" + "─" * 26 + "┴" + "─" * 20 + "┴" + "─" * 20 + "┴" + "─" * 20 + "┘")
+        lines.append("└" + "─" * 26 + "┴" + "─" * 25 + "┴" + "─" * 25 + "┴" + "─" * 25 + "┘")
 
         table_ascii = "\n".join(lines)
 
@@ -236,10 +249,10 @@ class Evaluator:
             r"\centering",
             r"\caption{Headline Generation Results}",
             r"\label{tab:results}",
-            r"\begin{tabular}{l|ccc|ccc|ccc}",
+            r"\begin{tabular}{l|cccc|cccc|cccc}",
             r"\hline",
-            r" & \multicolumn{3}{c|}{All} & \multicolumn{3}{c|}{Rich} & \multicolumn{3}{c}{Sparse} \\",
-            r"Method & RL & MET & BS & RL & MET & BS & RL & MET & BS \\",
+            r" & \multicolumn{4}{c|}{All} & \multicolumn{4}{c|}{Rich} & \multicolumn{4}{c}{Sparse} \\",
+            r"Method & RL & MET & BLU & BS & RL & MET & BLU & BS & RL & MET & BLU & BS \\",
             r"\hline",
         ]
 
@@ -252,7 +265,8 @@ class Evaluator:
                 vals.extend([
                     f"{g.get('rouge_l', 0):.3f}",
                     f"{g.get('meteor', 0):.3f}",
-                    f"{g.get('bert_score_f1', 0):.4f}",
+                    f"{g.get('bleu', 0):.3f}",
+                    f"{g.get('bert_score_f1', 0):.3f}",
                 ])
             latex_lines.append(f"{label} & {' & '.join(vals)} \\\\")
 
@@ -487,6 +501,7 @@ def main():
         log.info(
             f"  {method:<20}: ROUGE-L={all_r.get('rouge_l', 0):.4f}  "
             f"METEOR={all_r.get('meteor', 0):.4f}  "
+            f"BLEU={all_r.get('bleu', 0):.4f}  "
             f"(n={all_r.get('n_samples', 0):,})"
         )
 
