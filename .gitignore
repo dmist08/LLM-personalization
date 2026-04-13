@@ -8,9 +8,6 @@ build/
 *.egg
 .eggs/
 
-# Docs
-docs/
-
 # ── Virtual Environments ────────────────────────────────
 .venv/
 venv/
@@ -28,7 +25,7 @@ env/
 data/raw/
 data/processed/
 data/splits/
-*.jsonl
+data/interim/
 *.parquet
 *.npy
 *.pkl
@@ -42,28 +39,28 @@ models/
 *.safetensors
 *.gguf
 
-# BUT allow LoRA adapter (small, ~70MB, needed for reproducibility)
-!checkpoints/qlora/final/**
+# ── Checkpoints (too large for git) ─────────────────────
 checkpoints/
-*.safetensors
-*.bin
-*.pt
-*.pth
+# Allow LoRA adapter (small, ~70MB, needed for reproducibility)
+!checkpoints/lora/final/
+
+# ── Author Vectors (generated, regenerated per run) ─────
+author_vectors/
 
 # ── Logs ────────────────────────────────────────────────
 logs/
 *.log
 wandb/
-# BUT keep GPU tracking reports (small, needed for paper)
-!logs/gpu_tracking/
 
-# ── Outputs ─────────────────────────────────────────────
+# ── Outputs (regenerated per run) ───────────────────────
 outputs/
-# BUT keep evaluation results (small, needed for paper)
+# Keep evaluation results (small, needed for paper)
 !outputs/evaluation/
 
-# ── Temp (project temp files, backups, old scripts) ─────
-temp/
+# ── Docs (KEEP — plans, research paper) ─────────────────
+# Do NOT ignore docs/ — it has the canonical project plan
+# But ignore chat log exports (large JSON)
+docs/dev_chat_logs/
 
 # ── OS ──────────────────────────────────────────────────
 .DS_Store
@@ -77,9 +74,9 @@ desktop.ini
 # ── Jupyter ─────────────────────────────────────────────
 .ipynb_checkpoints/
 
-# ── Scraping artifacts (keep scraping code, ignore data) 
+# ── Scraping artifacts (keep code, ignore data) ─────────
 scraping/**/*.bak
 scraping/**/*.bak.jsonl
 
-# ── Antigravity agent (keep workflows, ignore brain) ────
+# ── Antigravity agent ───────────────────────────────────
 .gemini/

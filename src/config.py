@@ -86,7 +86,7 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    base_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    base_model: str = "models/Llama-3.1-8B-Instruct"
     lora_rank: int = 16
     lora_alpha: int = 32
     lora_dropout: float = 0.1
