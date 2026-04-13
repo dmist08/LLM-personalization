@@ -8,16 +8,20 @@ contrastive activation extraction in Phase 4.
 ONLY processes TRAIN split — never val or test (leakage prevention).
 
 RUNTIME ESTIMATE:
-  L4 GPU: ~1.5-2s per article at batch_size=8
+  L4 GPU (24GB): ~1.5-2s per article at batch_size=8
   Indian train (~6,500 articles): ~3-4 hours
-  LaMP-4 train (~12,500 articles): ~5-7 hours (only first 25,000 if capped)
+  LaMP-4 train (~12,500 articles): ~5-7 hours
   Recommendation: run --dataset indian first to validate, then lamp4 overnight.
 
 RUN:
   conda activate cold_start_sv
-  python -m src.pipeline.agnostic_gen --dataset indian
-  python -m src.pipeline.agnostic_gen --dataset lamp4
-  python -m src.pipeline.agnostic_gen --dataset both
+  python -m src.pipeline.agnostic_gen --dataset indian --batch-size 8
+  python -m src.pipeline.agnostic_gen --dataset lamp4  --batch-size 8
+  python -m src.pipeline.agnostic_gen --dataset both   --batch-size 8
+
+VALIDATE (no generation — just checks existing CSV):
+  python -m src.pipeline.agnostic_gen --validate-only --dataset indian
+  python -m src.pipeline.agnostic_gen --validate-only --dataset lamp4
 
 OUTPUT:
   data/interim/indian_agnostic_headlines.csv   (columns: id, agnostic_headline)
@@ -29,6 +33,15 @@ CHECK:
   - CSV has expected row count matching train split size
   - No empty agnostic_headline values
   - Headlines look generic/wire-service, NOT like the journalist's style
+
+FIELD CONTRACT (do NOT change without updating extract_style_vectors.py):
+  Indian  : article_field="article_body", id_field="url"
+  LaMP-4  : article_field="article_text", id_field="lamp4_id"
+
+LOADING STRATEGY:
+  No bitsandbytes/quantization. Load in float16 directly.
+  LLaMA-3.1-8B in float16 = ~16GB VRAM. Fits on L4 (24GB) with headroom.
+  bitsandbytes is only needed for LoRA training (train_lora.py), not inference.
 """
 
 import argparse
@@ -59,21 +72,95 @@ AGNOSTIC_PROMPT = (
 )
 
 
+def _validate_output_csv(output_csv: Path, dataset_label: str) -> bool:
+    """
+    Validate an existing agnostic headlines CSV.
+    Returns True if output looks clean, False if issues found.
+    Called by both --validate-only and the post-run check in main().
+    """
+    import random
+
+    if not output_csv.exists():
+        log.error(f"[{dataset_label}] CSV not found: {output_csv}")
+        return False
+
+    with open(output_csv, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    n_total = len(rows)
+    if n_total == 0:
+        log.error(f"[{dataset_label}] CSV is empty: {output_csv}")
+        return False
+
+    n_empty = sum(1 for r in rows if not r.get("agnostic_headline", "").strip())
+
+    # Spot-check for prompt echoes (common failure mode when article field is wrong)
+    echo_patterns = [
+        "following article", "Be concise", "Output ONLY", "Headline:",
+        "steps in the process", "Instead of",
+    ]
+    n_echoes = sum(
+        1 for r in rows
+        if any(pat.lower() in r.get("agnostic_headline", "").lower()
+               for pat in echo_patterns)
+    )
+
+    log.info(f"--- OUTPUT VALIDATION: {dataset_label} ---")
+    log.info(f"  Total rows     : {n_total:,}")
+    log.info(f"  Empty headlines: {n_empty} ({n_empty / n_total * 100:.1f}%)")
+    log.info(f"  Prompt echoes  : {n_echoes} (suspected garbage outputs)")
+
+    # Sample 5 rows for manual inspection
+    sample = random.sample(rows, min(5, len(rows)))
+    log.info("  Sample outputs (manual check — do these look like headlines?):")
+    for r in sample:
+        log.info(f"    [{r['id'][:50]}] → \"{r['agnostic_headline']}\"")
+
+    passed = True
+    if n_empty > 0:
+        log.warning(f"  ⚠ {n_empty} empty headlines — check article field name!")
+        passed = False
+    if n_echoes > n_total * 0.02:
+        log.warning(
+            f"  ⚠ {n_echoes} prompt echoes (>{n_total * 0.02:.0f} threshold) "
+            f"— model may not be stopping correctly"
+        )
+        passed = False
+    if passed:
+        log.info("  ✓ Validation passed — output looks clean")
+
+    return passed
+
+
 class AgnosticHeadlineGenerator:
-    """Generate style-agnostic headlines using base LLaMA in batched mode."""
+    """
+    Generate style-agnostic headlines using base LLaMA in batched mode.
+
+    Loading strategy: float16, no quantization, no bitsandbytes.
+    LLaMA-3.1-8B in float16 ≈ 16GB VRAM — fits on L4 (24GB) with ~8GB headroom.
+    """
 
     def __init__(self, model_name: str, batch_size: int = 8):
         import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from transformers import AutoTokenizer, AutoModelForCausalLM
 
         log.info(f"Loading model: {model_name}")
 
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        model_path = Path(model_name)
+        if model_path.exists():
+            assert model_path.is_dir(), (
+                f"Model path exists but is not a directory: {model_path}"
+            )
+            log.info(f"Model path resolved: {model_path.resolve()}")
+        else:
+            log.info(f"Model identifier (HuggingFace Hub): {model_name}")
+
+        # float16, no quantization — bitsandbytes not needed for inference
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            quantization_config=bnb_config,
+            torch_dtype=torch.float16,
             device_map="auto",
-            torch_dtype=torch.bfloat16,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -87,19 +174,20 @@ class AgnosticHeadlineGenerator:
         self.batch_size = batch_size
 
         allocated = torch.cuda.memory_allocated() / 1e9
-        log.info(f"Model loaded. GPU memory: {allocated:.1f} GB")
+        reserved = torch.cuda.memory_reserved() / 1e9
+        log.info(
+            f"Model loaded. GPU allocated: {allocated:.1f}GB | reserved: {reserved:.1f}GB"
+        )
 
     def generate_batch(self, articles: list[str]) -> list[str]:
         """Generate agnostic headlines for a batch of articles."""
         import torch
 
-        # Build prompts
         prompts = [
             AGNOSTIC_PROMPT.format(article=format_article_for_prompt(art, 400))
             for art in articles
         ]
 
-        # Tokenize with left-padding
         inputs = self.tokenizer(
             prompts,
             return_tensors="pt",
@@ -108,22 +196,21 @@ class AgnosticHeadlineGenerator:
             max_length=768,
         ).to("cuda")
 
+        # Track prompt lengths to decode only generated tokens
         prompt_lengths = [
-            (inputs["attention_mask"][i] == 1).sum().item()
+            int((inputs["attention_mask"][i] == 1).sum().item())
             for i in range(len(prompts))
         ]
 
         with torch.no_grad():
-            with torch.autocast("cuda"):
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=40,
-                    do_sample=False,
-                    temperature=1.0,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                )
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=40,
+                do_sample=False,
+                temperature=1.0,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
 
-        # Decode only generated tokens
         headlines = []
         for i, output in enumerate(outputs):
             gen_ids = output[prompt_lengths[i]:]
@@ -136,14 +223,14 @@ class AgnosticHeadlineGenerator:
     def _clean_output(self, text: str) -> str:
         """Clean generated headline — strip everything except the headline itself."""
         text = text.strip()
-        # Take only the first line (LLMs often generate follow-up text)
+        # Take only the first line
         text = text.split("\n")[0].strip()
         # Remove any "Headline:" prefix echoes
         text = re.sub(r"^Headline:\s*", "", text, flags=re.IGNORECASE)
         # Remove surrounding quotes
         text = re.sub(r'^["\']|["\']$', "", text)
         text = text.strip()
-        # Remove any trailing partial sentences (cut at last period if very long)
+        # Truncate to max 30 words
         words = text.split()
         if len(words) > 30:
             text = " ".join(words[:30])
@@ -153,13 +240,18 @@ class AgnosticHeadlineGenerator:
         self,
         input_jsonl: Path,
         output_csv: Path,
-        article_field: str = "article_text",
-        id_field: str = "url",
+        article_field: str,
+        id_field: str,
         resume: bool = True,
     ) -> None:
         """
         Process a full dataset JSONL → CSV of agnostic headlines.
         Supports resume from partial runs.
+
+        Empty articles are SKIPPED — no row is written.
+        Rationale: extract_style_vectors.py does agnostic_map.get(url) and
+        treats missing keys as skips. Writing empty rows would pass "" into
+        contrastive forward passes, corrupting style vectors silently.
         """
         import torch
 
@@ -175,7 +267,6 @@ class AgnosticHeadlineGenerator:
                     done_ids.add(row["id"])
             log.info(f"Resume: {len(done_ids):,} already processed")
 
-        # Filter to remaining
         remaining = [
             r for r in records
             if str(r.get(id_field, "")) not in done_ids
@@ -186,7 +277,6 @@ class AgnosticHeadlineGenerator:
             log.info("Nothing to process — all done!")
             return
 
-        # Open CSV in append mode
         output_csv.parent.mkdir(parents=True, exist_ok=True)
         write_header = not output_csv.exists() or not done_ids
         csv_file = open(output_csv, "a", newline="", encoding="utf-8")
@@ -196,6 +286,7 @@ class AgnosticHeadlineGenerator:
 
         total = len(remaining)
         processed = 0
+        skipped_empty = 0
         start_time = time.time()
 
         try:
@@ -204,29 +295,25 @@ class AgnosticHeadlineGenerator:
                 articles = [r.get(article_field, "") for r in batch]
                 ids = [str(r.get(id_field, "")) for r in batch]
 
-                # Validate: skip empty articles (prevents garbage output)
-                valid_mask = [bool(a and a.strip()) for a in articles]
-                if not all(valid_mask):
-                    n_empty = sum(1 for v in valid_mask if not v)
-                    empty_ids = [i for i, v in zip(ids, valid_mask) if not v]
-                    log.warning(
-                        f"Skipping {n_empty} empty articles in batch: {empty_ids[:3]}..."
-                    )
-                    # Write empty placeholder for skipped articles
-                    for rec_id, is_valid in zip(ids, valid_mask):
-                        if not is_valid:
-                            writer.writerow({"id": rec_id, "agnostic_headline": ""})
-                    # Filter to valid only
-                    articles = [a for a, v in zip(articles, valid_mask) if v]
-                    ids = [i for i, v in zip(ids, valid_mask) if v]
-                    if not articles:
-                        processed += len(batch)
-                        continue
+                # Skip empty articles — write NO row (see docstring above)
+                valid_articles: list[str] = []
+                valid_ids: list[str] = []
+                for article, rec_id in zip(articles, ids):
+                    if article and article.strip():
+                        valid_articles.append(article)
+                        valid_ids.append(rec_id)
+                    else:
+                        skipped_empty += 1
+                        log.warning(
+                            f"Skipping empty article — id={rec_id} "
+                            f"(field='{article_field}' missing or blank). "
+                            f"No row written."
+                        )
 
-                headlines = self.generate_batch(articles)
-
-                for rec_id, headline in zip(ids, headlines):
-                    writer.writerow({"id": rec_id, "agnostic_headline": headline})
+                if valid_articles:
+                    headlines = self.generate_batch(valid_articles)
+                    for rec_id, headline in zip(valid_ids, headlines):
+                        writer.writerow({"id": rec_id, "agnostic_headline": headline})
 
                 processed += len(batch)
 
@@ -234,40 +321,50 @@ class AgnosticHeadlineGenerator:
                 if processed % 200 < self.batch_size:
                     csv_file.flush()
 
-                # Progress logging every 100 articles
+                # Progress log every 100 articles
                 if processed % 100 < self.batch_size:
                     elapsed = time.time() - start_time
                     rate = elapsed / processed if processed > 0 else 1
                     eta = estimate_runtime(total - processed, rate)
                     pct = processed / total * 100
                     log.info(
-                        f"Processed {processed:,}/{total:,} ({pct:.1f}%) | {eta} remaining"
+                        f"Processed {processed:,}/{total:,} ({pct:.1f}%) | "
+                        f"skipped_empty={skipped_empty} | {eta} remaining"
                     )
 
                 # GPU cache cleanup every 500
                 if processed % 500 < self.batch_size:
                     torch.cuda.empty_cache()
                     allocated = torch.cuda.memory_allocated() / 1e9
-                    log.info(f"  GPU memory: {allocated:.1f} GB (after cache clear)")
+                    log.info(f"  GPU memory: {allocated:.1f}GB (after cache clear)")
 
         finally:
             csv_file.close()
 
         elapsed = time.time() - start_time
         log.info(f"Done. Processed {processed:,} articles in {elapsed:.0f}s")
+        if skipped_empty > 0:
+            log.error(
+                f"FIELD BUG SUSPECTED: {skipped_empty} articles had empty "
+                f"'{article_field}'. Verify article_field is correct for this dataset."
+            )
         log.info(f"Output: {output_csv}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Style-Agnostic Headline Generator")
     parser.add_argument(
         "--dataset", default="indian",
         choices=["indian", "lamp4", "both"],
-        help="Which dataset to process"
+        help="Which dataset to process",
     )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--resume", action="store_true", default=True)
     parser.add_argument("--no-resume", dest="resume", action="store_false")
+    parser.add_argument(
+        "--validate-only", action="store_true", default=False,
+        help="Skip generation — only validate existing output CSV(s) and exit",
+    )
     args = parser.parse_args()
 
     set_seed(cfg.training.seed)
@@ -276,36 +373,59 @@ def main():
     log.info("STYLE-AGNOSTIC HEADLINE GENERATION")
     log.info("=" * 60)
 
-    # GPU tracking
+    # Dataset config: (input_path, output_csv, article_field, id_field, label)
+    dataset_configs: list[tuple[Path, Path, str, str, str]] = []
+    if args.dataset in ("indian", "both"):
+        dataset_configs.append((
+            cfg.paths.indian_train_jsonl,
+            cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
+            "article_body",   # Indian field name — confirmed from JSONL inspection
+            "url",            # Indian lookup key
+            "indian",
+        ))
+    if args.dataset in ("lamp4", "both"):
+        dataset_configs.append((
+            cfg.paths.lamp4_processed_dir / "train.jsonl",
+            cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv",
+            "article_text",   # LaMP-4 field name — confirmed from JSONL inspection
+            "lamp4_id",       # LaMP-4 lookup key
+            "lamp4",
+        ))
+
+    # --validate-only: check existing CSVs, no GPU needed
+    if args.validate_only:
+        log.info("Mode: VALIDATE ONLY (no generation)")
+        all_passed = True
+        for _, output_path, _, _, label in dataset_configs:
+            passed = _validate_output_csv(output_path, label)
+            if not passed:
+                all_passed = False
+        if all_passed:
+            log.info("\n✓ All validations passed")
+        else:
+            log.error("\n✗ Validation failed — fix issues before running extraction")
+            sys.exit(1)
+        return
+
+    # Normal generation path
     tracker = GPUTracker("agnostic_gen")
     tracker.start()
 
     generator = AgnosticHeadlineGenerator(cfg.model.base_model, args.batch_size)
 
-    datasets = []
-    if args.dataset in ("indian", "both"):
-        datasets.append((
-            cfg.paths.indian_train_jsonl,  # data/splits/indian_train.jsonl
-            cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
-            "article_body", "url",  # Indian uses article_body, NOT article_text
-        ))
-    if args.dataset in ("lamp4", "both"):
-        datasets.append((
-            cfg.paths.lamp4_processed_dir / "train.jsonl",
-            cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv",
-            "article_text", "lamp4_id",  # LaMP-4 uses article_text
-        ))
-
-    for input_path, output_path, art_field, id_field in datasets:
+    for input_path, output_path, art_field, id_field, label in dataset_configs:
         if not input_path.exists():
             log.error(f"Input not found: {input_path}")
+            log.error("Check cfg.paths.indian_train_jsonl / cfg.paths.lamp4_processed_dir")
             continue
 
-        log.info(f"\nProcessing: {input_path.name}")
-        log.info(f"  Input path: {input_path}")
+        log.info(f"\nProcessing: {label}")
+        log.info(f"  Input path   : {input_path}")
+        log.info(f"  Output CSV   : {output_path}")
         log.info(f"  Article field: {art_field}")
-        log.info(f"  ID field: {id_field}")
-        tracker.snapshot(f"start_{input_path.stem}")
+        log.info(f"  ID field     : {id_field}")
+        log.info(f"  Resume       : {args.resume}")
+        tracker.snapshot(f"start_{label}")
 
         generator.process_dataset(
             input_path, output_path,
@@ -314,27 +434,13 @@ def main():
             resume=args.resume,
         )
 
-        tracker.snapshot(f"done_{input_path.stem}")
+        tracker.snapshot(f"done_{label}")
 
-        # --- Output validation ---
-        if output_path.exists():
-            import csv as csv_mod
-            with open(output_path, "r", encoding="utf-8") as f:
-                reader = csv_mod.DictReader(f)
-                rows = list(reader)
-            n_total = len(rows)
-            n_empty = sum(1 for r in rows if not r.get("agnostic_headline", "").strip())
-            log.info(f"\n--- OUTPUT VALIDATION ---")
-            log.info(f"  Total rows: {n_total:,}")
-            log.info(f"  Empty headlines: {n_empty} ({n_empty/max(n_total,1)*100:.1f}%)")
-            if n_empty > 0:
-                log.warning(f"  ⚠ {n_empty} empty headlines detected — check article field!")
-            else:
-                log.info(f"  ✓ Zero empty headlines — output looks clean")
+        # Automatic post-run validation
+        _validate_output_csv(output_path, label)
 
-    report = tracker.stop()
+    tracker.stop()
     tracker.add_metric("dataset", args.dataset)
-
     log.info("\n✓ Agnostic headline generation complete")
 
 
