@@ -8,7 +8,7 @@ requests==2.31.0            # HT profile pages (numbered pagination)
 beautifulsoup4==4.12.3      # HT HTML parsing
 trafilatura==1.9.0          # Article content extraction (highest F1: 0.958)
 newspaper4k==0.9.3.1        # Fallback extractor if trafilatura fails
-lxml==5.2.1                 # Required by trafilatura and bs4
+lxml<5.2.0                 # Required by trafilatura and bs4
 tqdm==4.66.4                # Progress bars on all loops
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -18,21 +18,21 @@ datasets==2.19.1            # HuggingFace datasets — LaMP-4 download
 python-dotenv==1.0.1        # Load .env API keys
 
 # ── ML / Training (install on GPU machine, not local) ─────────────────────────
-# torch==2.3.0              # Install separately with correct CUDA version
-# transformers==4.41.2
-# peft==0.11.1              # QLoRA / LoRA adapters
-# bitsandbytes==0.43.1      # 4-bit quantization
-# accelerate==0.30.1        # Multi-GPU / mixed precision training
-# trl==0.8.6                # SFTTrainer for QLoRA fine-tuning
-# sentencepiece==0.2.0      # LLaMA tokenizer
+torch==2.3.0              # Install separately with correct CUDA version
+transformers==4.41.2
+peft==0.11.1              # QLoRA / LoRA adapters
+bitsandbytes==0.43.1      # 4-bit quantization
+accelerate==0.30.1        # Multi-GPU / mixed precision training
+trl==0.8.6                # SFTTrainer for QLoRA fine-tuning
+sentencepiece==0.2.0      # LLaMA tokenizer
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
-# rouge-score==0.1.2
-# nltk==3.8.1               # METEOR
-# bert-score==0.3.13
+rouge-score==0.1.2
+nltk==3.8.1               # METEOR
+bert-score==0.3.13
 
 # ── Experiment tracking ───────────────────────────────────────────────────────
-# wandb==0.17.0             # Install on GPU machine before training
+wandb==0.17.0             # Install on GPU machine before training
 
 # ── Style vector / cold-start ─────────────────────────────────────────────────
 scikit-learn==1.4.2         # PCA, KMeans, silhouette score
