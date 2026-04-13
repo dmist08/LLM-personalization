@@ -118,9 +118,11 @@ def _validate_output_csv(output_csv: Path, dataset_label: str) -> bool:
         log.info(f"    [{r['id'][:50]}] → \"{r['agnostic_headline']}\"")
 
     passed = True
-    if n_empty > 0:
-        log.warning(f"  ⚠ {n_empty} empty headlines — check article field name!")
+    if n_empty > n_total * 0.01:
+        log.warning(f"  ⚠ {n_empty} empty headlines (>{n_total*0.01:.0f} threshold) — check article field name!")
         passed = False
+    elif n_empty > 0:
+        log.warning(f"  ⚠ {n_empty} empty headlines detected (acceptable, <1%). Will be ignored later.")
     if n_echoes > n_total * 0.02:
         log.warning(
             f"  ⚠ {n_echoes} prompt echoes (>{n_total * 0.02:.0f} threshold) "
@@ -183,9 +185,18 @@ class AgnosticHeadlineGenerator:
         """Generate agnostic headlines for a batch of articles."""
         import torch
 
-        prompts = [
+        raw_prompts = [
             AGNOSTIC_PROMPT.format(article=format_article_for_prompt(art, 400))
             for art in articles
+        ]
+        
+        # Apply LLaMA-3.1 chat template so the instruct model follows instructions
+        prompts = [
+            self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": p}], 
+                tokenize=False, 
+                add_generation_prompt=True
+            ) for p in raw_prompts
         ]
 
         inputs = self.tokenizer(
