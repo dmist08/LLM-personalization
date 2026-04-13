@@ -67,6 +67,19 @@ class PathConfig:
     def splits_dir(self) -> Path:
         return self.project_root / "data" / "splits"
 
+    # Canonical Indian split paths (underscore author_ids, article_body field)
+    @property
+    def indian_train_jsonl(self) -> Path:
+        return self.splits_dir / "indian_train.jsonl"
+
+    @property
+    def indian_val_jsonl(self) -> Path:
+        return self.splits_dir / "indian_val.jsonl"
+
+    @property
+    def indian_test_jsonl(self) -> Path:
+        return self.splits_dir / "indian_test.jsonl"
+
 
 @dataclass
 class DataConfig:
@@ -87,14 +100,14 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     base_model: str = "models/Llama-3.1-8B-Instruct"
+    # LoRA config — bf16, attention-only, no quantization
     lora_rank: int = 16
     lora_alpha: int = 32
-    lora_dropout: float = 0.1
+    lora_dropout: float = 0.05
     lora_target_modules: List[str] = field(default_factory=lambda: [
         "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj"
     ])
-    quantization_bits: int = 4
+    # StyleVector config
     extraction_layer_range: Tuple[int, int] = (15, 28)
     extraction_layers: List[int] = field(default_factory=lambda: [15, 18, 21, 24, 27])
     pca_components: int = 50
@@ -110,9 +123,10 @@ class TrainingConfig:
     batch_size: int = 4
     grad_accumulation: int = 8
     learning_rate: float = 2e-4
-    num_epochs: int = 2
+    num_epochs: int = 7
+    early_stopping_patience: int = 2  # Stop if val loss rises 2 consecutive epochs
     save_steps: int = 500
-    warmup_ratio: float = 0.03
+    warmup_steps: int = 100
     max_seq_length: int = 1024
     max_train_samples: int = 25000
     hf_repo_id: str = "dharmik-mistry/cold-start-stylevector"
@@ -155,9 +169,11 @@ def get_config() -> Config:
         cfg.paths.outputs_dir,
         cfg.paths.outputs_dir / "baselines",
         cfg.paths.outputs_dir / "evaluation",
-        cfg.paths.outputs_dir / "results",
+        cfg.paths.outputs_dir / "stylevector",
+        cfg.paths.outputs_dir / "cold_start",
         cfg.paths.models_dir,
         cfg.paths.logs_dir,
+        cfg.paths.logs_dir / "gpu_tracking",
         cfg.paths.splits_dir,
     ]
     for d in dirs:

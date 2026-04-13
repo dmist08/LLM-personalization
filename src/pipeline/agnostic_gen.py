@@ -50,10 +50,12 @@ from src.utils_gpu import GPUTracker
 cfg = get_config()
 log = setup_logging("agnostic_gen", cfg.paths.logs_dir)
 
-# This is the EXACT prompt from the spec. Do NOT change wording.
+# LOCKED PROMPT — identical across agnostic_gen, extract_style_vectors, sweeps.
+# Do NOT change wording without updating ALL scripts.
 AGNOSTIC_PROMPT = (
-    "Write a neutral, factual news headline for the following article. "
-    "Be concise and objective.\n\n{article}\n\nHeadline:"
+    "Write ONLY a single neutral, factual news headline for the following article. "
+    "Output ONLY the headline text, nothing else. No explanation, no quotes, no prefix.\n\n"
+    "{article}\n\nHeadline:"
 )
 
 
@@ -132,12 +134,16 @@ class AgnosticHeadlineGenerator:
         return headlines
 
     def _clean_output(self, text: str) -> str:
-        """Clean generated headline."""
+        """Clean generated headline — strip everything except the headline itself."""
         text = text.strip()
-        text = re.sub(r'^["\']|["\']$', "", text)
-        text = re.sub(r"^Headline:\s*", "", text, flags=re.IGNORECASE)
+        # Take only the first line (LLMs often generate follow-up text)
         text = text.split("\n")[0].strip()
-        # Truncate to max 30 words
+        # Remove any "Headline:" prefix echoes
+        text = re.sub(r"^Headline:\s*", "", text, flags=re.IGNORECASE)
+        # Remove surrounding quotes
+        text = re.sub(r'^["\']|["\']$', "", text)
+        text = text.strip()
+        # Remove any trailing partial sentences (cut at last period if very long)
         words = text.split()
         if len(words) > 30:
             text = " ".join(words[:30])
@@ -197,6 +203,25 @@ class AgnosticHeadlineGenerator:
                 batch = remaining[batch_start:batch_start + self.batch_size]
                 articles = [r.get(article_field, "") for r in batch]
                 ids = [str(r.get(id_field, "")) for r in batch]
+
+                # Validate: skip empty articles (prevents garbage output)
+                valid_mask = [bool(a and a.strip()) for a in articles]
+                if not all(valid_mask):
+                    n_empty = sum(1 for v in valid_mask if not v)
+                    empty_ids = [i for i, v in zip(ids, valid_mask) if not v]
+                    log.warning(
+                        f"Skipping {n_empty} empty articles in batch: {empty_ids[:3]}..."
+                    )
+                    # Write empty placeholder for skipped articles
+                    for rec_id, is_valid in zip(ids, valid_mask):
+                        if not is_valid:
+                            writer.writerow({"id": rec_id, "agnostic_headline": ""})
+                    # Filter to valid only
+                    articles = [a for a, v in zip(articles, valid_mask) if v]
+                    ids = [i for i, v in zip(ids, valid_mask) if v]
+                    if not articles:
+                        processed += len(batch)
+                        continue
 
                 headlines = self.generate_batch(articles)
 
@@ -260,15 +285,15 @@ def main():
     datasets = []
     if args.dataset in ("indian", "both"):
         datasets.append((
-            cfg.paths.indian_processed_dir / "all_train.jsonl",
+            cfg.paths.indian_train_jsonl,  # data/splits/indian_train.jsonl
             cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
-            "article_text", "url",
+            "article_body", "url",  # Indian uses article_body, NOT article_text
         ))
     if args.dataset in ("lamp4", "both"):
         datasets.append((
             cfg.paths.lamp4_processed_dir / "train.jsonl",
             cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv",
-            "article_text", "lamp4_id",
+            "article_text", "lamp4_id",  # LaMP-4 uses article_text
         ))
 
     for input_path, output_path, art_field, id_field in datasets:
@@ -277,6 +302,9 @@ def main():
             continue
 
         log.info(f"\nProcessing: {input_path.name}")
+        log.info(f"  Input path: {input_path}")
+        log.info(f"  Article field: {art_field}")
+        log.info(f"  ID field: {id_field}")
         tracker.snapshot(f"start_{input_path.stem}")
 
         generator.process_dataset(
@@ -287,6 +315,22 @@ def main():
         )
 
         tracker.snapshot(f"done_{input_path.stem}")
+
+        # --- Output validation ---
+        if output_path.exists():
+            import csv as csv_mod
+            with open(output_path, "r", encoding="utf-8") as f:
+                reader = csv_mod.DictReader(f)
+                rows = list(reader)
+            n_total = len(rows)
+            n_empty = sum(1 for r in rows if not r.get("agnostic_headline", "").strip())
+            log.info(f"\n--- OUTPUT VALIDATION ---")
+            log.info(f"  Total rows: {n_total:,}")
+            log.info(f"  Empty headlines: {n_empty} ({n_empty/max(n_total,1)*100:.1f}%)")
+            if n_empty > 0:
+                log.warning(f"  ⚠ {n_empty} empty headlines detected — check article field!")
+            else:
+                log.info(f"  ✓ Zero empty headlines — output looks clean")
 
     report = tracker.stop()
     tracker.add_metric("dataset", args.dataset)
