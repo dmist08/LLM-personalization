@@ -1,13 +1,14 @@
 """
-src/pipeline/extract_style_vectors.py — Style vector extraction (Prompt 9).
+src/pipeline/extract_style_vectors.py — Style vector extraction (Phase 2B).
 =============================================================================
-Core StyleVector extraction using contrastive activation steering.
+Core StyleVector extraction using contrastive activation steering, plus
+the two-stage ROUGE-L layer sweep (Phase 2C).
 
 CONCEPT:
   For each author u with N articles:
     For each article i:
-      pos_text = article_i + "\\n\\nHeadline: " + real_headline_i
-      neg_text = article_i + "\\n\\nHeadline: " + agnostic_headline_i
+      pos_text = AGNOSTIC_PROMPT + real_headline_i
+      neg_text = AGNOSTIC_PROMPT + agnostic_headline_i
       pos_activation = hidden_state_at_layer_l(pos_text, last_token)
       neg_activation = hidden_state_at_layer_l(neg_text, last_token)
       diff_i = pos_activation - neg_activation
@@ -15,18 +16,40 @@ CONCEPT:
 
   The "last token" is position -1 on the sequence dimension.
   We extract the OUTPUT of transformer block l (post-attention, post-FF).
-  Layer l is swept over [15, 18, 21, 24, 27] — best layer selected on val.
+  All 5 layers {15, 18, 21, 24, 27} are extracted in a single pass per article.
+  Best layer is selected via two-stage ROUGE-L sweep (--run-layer-sweep).
 
-RUN:
-  conda activate cold_start_sv
-  python -m src.pipeline.extract_style_vectors --dataset indian
-  python -m src.pipeline.extract_style_vectors --dataset lamp4
-  python -m src.pipeline.extract_style_vectors --run-layer-sweep
+FIELD CONTRACT:
+  Indian  : article_body field, keyed by url
+  LaMP-4  : article_text field, keyed by lamp4_id
+
+RUN (Phase 2B — extraction):
+  # Studio 1: Indian only
+  python -m src.pipeline.extract_style_vectors \
+      --model-path models/Llama-3.1-8B-Instruct \
+      --dataset indian --layers 15,18,21,24,27 --resume
+
+  # Studio 2: LaMP-4 only
+  python -m src.pipeline.extract_style_vectors \
+      --model-path models/Llama-3.1-8B-Instruct \
+      --dataset lamp4 --layers 15,18,21,24,27 --resume
+
+RUN (Phase 2C — layer sweep, after both datasets extracted):
+  python -m src.pipeline.extract_style_vectors \
+      --model-path models/Llama-3.1-8B-Instruct \
+      --run-layer-sweep \
+      --sweep-stage1-authors "ananya_das,yash_nitish_bajaj,mahima_pandey,neeshita_nyayapati" \
+      --sweep-n-articles 20 \
+      --sweep-alphas "0.3,0.5,0.7"
 
 OUTPUT:
-  author_vectors/indian/layer_{l}/{author_id}.npy
-  author_vectors/lamp4/layer_{l}/{user_id}.npy
-  author_vectors/manifest.json
+  author_vectors/indian/layer_{l}/{author_id}.npy   ← 42 authors × 5 layers
+  author_vectors/lamp4/layer_{l}/{user_id}.npy      ← ≤500 rich users × 5 layers
+  author_vectors/indian/manifest.json               ← Studio 1 only
+  author_vectors/lamp4/manifest.json                ← Studio 2 only
+  author_vectors/lamp4/EXTRACTION_DONE              ← sentinel (Studio 2 writes)
+  outputs/evaluation/layer_sweep.json
+  outputs/evaluation/layer_sweep.png                ← paper figure
   logs/extract_style_vectors_YYYYMMDD_HHMMSS.log
   logs/gpu_tracking/extract_style_vectors_*.json
 """
@@ -210,17 +233,18 @@ class StyleVectorExtractor:
             )
             real_headline = art.get("headline") or art.get("title", "")
 
-            # Look up agnostic headline:
-            # - Indian: keyed by article URL
-            # - LaMP-4: profile articles have no ID — use user_id (author_id) as key
-            if dataset == "lamp4":
-                agnostic_hl = agnostic_headlines.get(str(author_id))
-                # Fallback if LaMP-4 agnostic CSV is broken or missing IDs
-                if not agnostic_hl and real_headline:
-                    agnostic_hl = "News Update: " + real_headline
-            else:
-                art_id = art.get("url") or art.get("lamp4_id") or ""
-                agnostic_hl = agnostic_headlines.get(str(art_id))
+            # Look up agnostic headline.
+            # KEY CONTRACT (must match agnostic_gen.py CSV 'id' column):
+            #   Indian  : keyed by 'url' field
+            #   LaMP-4  : keyed by 'id' field = '{user_id}_p{idx}' synthetic key
+            #             (set by _expand_lamp4_profiles() in agnostic_gen.py)
+            # Do NOT use lamp4_id — expanded records don't carry it.
+            art_id = (
+                art.get("id")   # LaMP-4 expanded: "{user_id}_p{idx}"
+                or art.get("url")  # Indian articles
+                or art.get("lamp4_id", "")  # last-resort fallback only
+            )
+            agnostic_hl = agnostic_headlines.get(str(art_id))
 
             if not agnostic_hl:
                 skipped += 1
@@ -289,13 +313,17 @@ class StyleVectorExtractor:
             )
             real_headline = art.get("headline") or art.get("title", "")
 
-            # Agnostic lookup — key format must match agnostic_gen.py output
-            if dataset == "lamp4":
-                # Key: "{user_id}_p{idx}" — matches _expand_lamp4_profiles() output
-                agnostic_hl = agnostic_headlines.get(f"{author_id}_p{art_idx}")
-            else:
-                art_id = art.get("url") or art.get("lamp4_id") or ""
-                agnostic_hl = agnostic_headlines.get(str(art_id))
+            # Agnostic lookup — key must match agnostic_gen.py CSV 'id' column.
+            # KEY CONTRACT:
+            #   Indian  : 'url' field
+            #   LaMP-4  : 'id' field = '{user_id}_p{idx}' (from _expand_lamp4_profiles)
+            # Do NOT use lamp4_id — expanded records don't carry it.
+            art_id = (
+                art.get("id")   # LaMP-4 expanded: "{user_id}_p{idx}"
+                or art.get("url")  # Indian articles
+                or art.get("lamp4_id", "")  # last-resort fallback only
+            )
+            agnostic_hl = agnostic_headlines.get(str(art_id))
 
             if not agnostic_hl or not real_headline:
                 skipped += 1
@@ -394,13 +422,31 @@ class StyleVectorExtractor:
             import random
             random.seed(42)
             for uid, arts in authors:
-                profile = arts[0].get("profile", [])
-                if len(profile) >= 50:  # Only rich users for cluster pool
-                    # Deterministic slice — NOT random.sample — because
-                    # agnostic_gen.py uses the same ordering to assign
-                    # per-article keys ({user_id}_p{idx}).
-                    profile = profile[:MAX_PROFILE_ARTICLES]
-                    authors_with_profiles.append((uid, profile))
+                # LaMP-4 train.jsonl can have two structures depending on preprocessing:
+                #   A) Per-user: one record per user, with a "profile" list of historical
+                #      articles as {"text":..., "output":...} sub-objects. User_id groups
+                #      one record.
+                #   B) Per-article: one record per article with article_text + lamp4_id.
+                #      Multiple records share the same user_id.
+                #
+                # Check for Structure A first (nested profile ≥50 items):
+                profile_raw = arts[0].get("profile", [])
+                if len(profile_raw) >= 50:
+                    # Structure A — normalize profile sub-object fields to match
+                    # the field names expected by extract_author_vector_multilayer:
+                    # profile items use "text"→article_text, "output"→headline
+                    normalized = []
+                    for item in profile_raw[:MAX_PROFILE_ARTICLES]:
+                        normalized.append({
+                            "article_text": item.get("text", item.get("article_text", "")),
+                            "headline":     item.get("output", item.get("headline", "")),
+                            "lamp4_id":     item.get("lamp4_id", item.get("id", "")),
+                        })
+                    authors_with_profiles.append((uid, normalized))
+                elif len(arts) >= 50:
+                    # Structure B — each record IS a training article.
+                    # article_text and lamp4_id already present at top level.
+                    authors_with_profiles.append((uid, arts[:MAX_PROFILE_ARTICLES]))
             # Randomly sample MAX_USERS for tractable runtime
             if len(authors_with_profiles) > MAX_USERS:
                 log.info(f"Sampling {MAX_USERS} rich users from {len(authors_with_profiles)} total")
@@ -452,85 +498,349 @@ class StyleVectorExtractor:
         save_json(manifest, manifest_path)
         log.info(f"\nSaved manifest: {manifest_path} ({len(manifest)} authors)")
 
-    def layer_sweep_on_val(
+    def _generate_steered_headline(
+        self,
+        article: str,
+        style_vector: np.ndarray,
+        layer: int,
+        alpha: float,
+        max_new_tokens: int = 30,
+    ) -> str:
+        """
+        Generate a headline using activation steering with a pre-computed style vector.
+
+        Registers a forward hook on transformer layer `layer` that adds
+        alpha * style_vector to the hidden state at every generated token position.
+        Hook is always removed in the finally block — no resource leaks.
+        """
+        import torch
+
+        article_words = article.split()
+        if len(article_words) > 400:
+            article = " ".join(article_words[:400])
+
+        prompt = AGNOSTIC_PROMPT.format(article=article)
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=512
+        ).to(self.model.device)
+        prompt_len = inputs["input_ids"].shape[1]
+
+        sv_tensor = torch.tensor(
+            style_vector, dtype=torch.float16, device=self.model.device
+        )
+
+        hooks: list = []
+
+        def hook_fn(module, input, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            hidden = hidden + alpha * sv_tensor.unsqueeze(0).unsqueeze(0)
+            return (hidden,) + output[1:] if isinstance(output, tuple) else hidden
+
+        hooks.append(self.model.model.layers[layer].register_forward_hook(hook_fn))
+
+        try:
+            with torch.no_grad():
+                out = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    temperature=1.0,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+            generated = out[0][prompt_len:]
+            text = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+            # Take first line only, strip common generation artifacts
+            for stop in ["\n", "Article:", "Generate"]:
+                if stop in text:
+                    text = text.split(stop)[0].strip()
+            return text
+        finally:
+            for h in hooks:
+                h.remove()
+
+    def layer_sweep_rouge_l(
         self,
         val_jsonl: Path,
-        agnostic_csv: Path,
         style_vector_dir: Path,
         layer_indices: list[int],
-        n_samples: int = 200,
-    ) -> dict[int, float]:
+        stage1_authors: list[str],
+        stage1_n_articles: int = 20,
+        stage1_alphas: Optional[list[float]] = None,
+        stage2_alpha: float = 0.5,
+        article_field: str = "article_body",
+        headline_field: str = "headline",
+        id_field: str = "author_id",
+    ) -> dict:
         """
-        Evaluate each layer's style vectors on validation set.
-        Returns {layer_idx: rouge_l_score}.
+        Two-stage ROUGE-L layer sweep (Phase 2C). Replaces the broken norm-based
+        layer_sweep_on_val() which was selecting layers by vector magnitude — a
+        meaningless proxy for style quality.
+
+        Stage 1 — Layer selection using stable rich-author signal:
+          For each layer in layer_indices:
+            For each alpha in stage1_alphas (default [0.3, 0.5, 0.7]):
+              For each of the 4 locked stage1_authors:
+                Load their training-split style vector at this layer
+                Run steered inference on first stage1_n_articles val articles
+                Compute ROUGE-L against real headlines
+            Average ROUGE-L across all (alpha, author, article) combinations
+          → layer score = average ROUGE-L across 3 alphas
+          → Rank all layers. Record top-2.
+
+        Stage 2 — Sanity check on the target population (sparse/mid authors):
+          Take top-2 layers from Stage 1.
+          Run steering at stage2_alpha on ALL available val articles for
+          all authors NOT in stage1_authors (i.e., sparse and mid authors).
+          Decision rule:
+            - If Stage 1 winner also wins Stage 2 (or within 0.002): keep winner
+            - If runner-up beats winner by >0.002: use runner-up, log the override
+
+        Why multiple alphas in Stage 1: single-alpha sweeps create a circular
+        dependency (the layer you select depends on which alpha you assume, and
+        the alpha you select in Phase 3 depends on which layer). Averaging over
+        three alphas removes this dependency.
+
+        Runtime estimate: ~30 min Stage 1 + ~2 min Stage 2 on L4.
+
+        Returns dict with keys: stage1, stage2, best_layer, stage2_winner.
         """
-        from rouge_score import rouge_scorer
+        from rouge_score import rouge_scorer as rouge_scorer_module
 
-        val_records = load_jsonl(val_jsonl)[:n_samples]
-        log.info(f"Layer sweep on {len(val_records)} val samples")
+        if stage1_alphas is None:
+            stage1_alphas = [0.3, 0.5, 0.7]
 
-        # Load agnostic headlines
-        agnostic = {}
-        if agnostic_csv.exists():
-            with open(agnostic_csv, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    agnostic[row["id"]] = row["agnostic_headline"]
+        scorer = rouge_scorer_module.RougeScorer(["rougeL"], use_stemmer=True)
 
-        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-        results: dict[int, float] = {}
+        # Load val records and group by author
+        val_records = load_jsonl(val_jsonl)
+        by_author: dict[str, list] = {}
+        for r in val_records:
+            aid = r.get(id_field, "")
+            if aid:
+                by_author.setdefault(aid, []).append(r)
+
+        log.info(f"Val authors available: {len(by_author)}")
+        log.info(f"Stage 1 locked authors : {stage1_authors}")
+        log.info(f"Stage 1 alphas         : {stage1_alphas}")
+        log.info(f"Stage 1 articles/author: {stage1_n_articles}")
+        log.info(f"Stage 2 alpha          : {stage2_alpha}")
+
+        # ── Stage 1: rich authors, 3 alphas ──────────────────────────────────
+        log.info("\n" + "═" * 60)
+        log.info("LAYER SWEEP STAGE 1 (rich authors, averaged over 3 alphas)")
+        log.info("═" * 60)
+
+        stage1_scores: dict[int, float] = {}
 
         for layer_idx in layer_indices:
             layer_dir = style_vector_dir / f"layer_{layer_idx}"
             if not layer_dir.exists():
-                log.warning(f"  Layer {layer_idx}: no vectors found")
+                log.warning(f"Layer {layer_idx}: vector dir not found — skipping")
                 continue
 
-            # Simple evaluation: how much do style vectors differ by layer
-            # (full steering inference would require more complex setup)
-            vector_norms = []
-            for npy_file in layer_dir.glob("*.npy"):
-                v = np.load(npy_file)
-                vector_norms.append(np.linalg.norm(v))
+            per_alpha_scores: list[float] = []
 
-            avg_norm = np.mean(vector_norms) if vector_norms else 0
-            results[layer_idx] = avg_norm
+            for alpha in stage1_alphas:
+                per_author_scores: list[float] = []
 
-            log.info(f"  Layer {layer_idx}: avg vector norm = {avg_norm:.4f} "
-                     f"({len(vector_norms)} vectors)")
+                for author_id in stage1_authors:
+                    sv_path = layer_dir / f"{author_id}.npy"
+                    if not sv_path.exists():
+                        log.warning(
+                            f"  Layer {layer_idx} α={alpha}: "
+                            f"no vector for {author_id} — skipping author"
+                        )
+                        continue
 
-        # Log table
-        log.info("\nLayer sweep results:")
-        log.info(f"{'Layer':>8} {'Avg Norm':>12} {'N Vectors':>12}")
-        log.info("-" * 35)
-        best_layer = max(results, key=results.get) if results else layer_indices[0]
-        for layer, score in sorted(results.items()):
-            marker = " ← best" if layer == best_layer else ""
-            log.info(f"{layer:>8} {score:>12.4f} {len(list((style_vector_dir / f'layer_{layer}').glob('*.npy'))):>12}{marker}")
+                    sv = np.load(sv_path)
+                    articles = by_author.get(author_id, [])[:stage1_n_articles]
+                    if not articles:
+                        log.warning(f"  Author {author_id}: no val articles found")
+                        continue
 
-        log.info(f"\nBest layer: {best_layer}")
+                    article_scores: list[float] = []
+                    for rec in articles:
+                        article = rec.get(article_field, "")
+                        real_hl = rec.get(headline_field, "")
+                        if not article or not real_hl:
+                            continue
+                        try:
+                            pred = self._generate_steered_headline(
+                                article, sv, layer_idx, alpha
+                            )
+                            rouge = scorer.score(real_hl, pred)["rougeL"].fmeasure
+                            article_scores.append(rouge)
+                        except Exception as e:
+                            log.warning(f"  Steering error ({author_id}): {e}")
 
-        # Save plot
+                    if article_scores:
+                        author_mean = float(np.mean(article_scores))
+                        per_author_scores.append(author_mean)
+                        log.info(
+                            f"  Layer {layer_idx} α={alpha:.1f} {author_id}: "
+                            f"ROUGE-L={author_mean:.4f} ({len(article_scores)} articles)"
+                        )
+
+                if per_author_scores:
+                    per_alpha_scores.append(float(np.mean(per_author_scores)))
+
+            if per_alpha_scores:
+                stage1_scores[layer_idx] = float(np.mean(per_alpha_scores))
+                log.info(
+                    f"► Layer {layer_idx} Stage 1 score "
+                    f"(avg {len(per_alpha_scores)} alphas): "
+                    f"{stage1_scores[layer_idx]:.4f}"
+                )
+
+        if not stage1_scores:
+            raise RuntimeError(
+                "Stage 1 produced no results. "
+                "Check style vector paths and val JSONL field names."
+            )
+
+        sorted_layers = sorted(stage1_scores, key=stage1_scores.get, reverse=True)
+        top2_layers = sorted_layers[:2]
+        stage1_winner = sorted_layers[0]
+
+        log.info(f"\nStage 1 ranking:")
+        for rank, l in enumerate(sorted_layers, 1):
+            log.info(f"  #{rank}: layer {l} → ROUGE-L={stage1_scores[l]:.4f}")
+
+        # ── Stage 2: sparse/mid authors, fixed alpha ──────────────────────────
+        log.info("\n" + "═" * 60)
+        log.info(f"LAYER SWEEP STAGE 2 (sparse+mid authors, α={stage2_alpha})")
+        log.info("═" * 60)
+
+        # Any val author not in stage1_authors is treated as sparse/mid
+        stage2_authors = [aid for aid in by_author if aid not in stage1_authors]
+        log.info(f"Stage 2 authors ({len(stage2_authors)}): {stage2_authors}")
+
+        stage2_scores: dict[int, float] = {}
+
+        for layer_idx in top2_layers:
+            layer_dir = style_vector_dir / f"layer_{layer_idx}"
+            all_rouge: list[float] = []
+
+            for author_id in stage2_authors:
+                sv_path = layer_dir / f"{author_id}.npy"
+                if not sv_path.exists():
+                    continue
+                sv = np.load(sv_path)
+
+                # Use ALL available val articles for sparse/mid (there are few)
+                for rec in by_author.get(author_id, []):
+                    article = rec.get(article_field, "")
+                    real_hl = rec.get(headline_field, "")
+                    if not article or not real_hl:
+                        continue
+                    try:
+                        pred = self._generate_steered_headline(
+                            article, sv, layer_idx, stage2_alpha
+                        )
+                        all_rouge.append(scorer.score(real_hl, pred)["rougeL"].fmeasure)
+                    except Exception as e:
+                        log.warning(f"  Stage 2 error ({author_id}): {e}")
+
+            if all_rouge:
+                stage2_scores[layer_idx] = float(np.mean(all_rouge))
+                log.info(
+                    f"  Layer {layer_idx}: ROUGE-L={stage2_scores[layer_idx]:.4f} "
+                    f"({len(all_rouge)} articles)"
+                )
+
+        # Decision rule: confirm Stage 1 winner or override with runner-up
+        if len(stage2_scores) >= 2 and len(top2_layers) >= 2:
+            runner_up = top2_layers[1]
+            s1_val = stage2_scores.get(stage1_winner, 0.0)
+            s2_val = stage2_scores.get(runner_up, 0.0)
+
+            if s2_val > s1_val + 0.002:
+                best_layer = runner_up
+                log.warning(
+                    f"STAGE 2 OVERRIDE: runner-up layer {runner_up} "
+                    f"(ROUGE-L={s2_val:.4f}) beats winner layer {stage1_winner} "
+                    f"(ROUGE-L={s1_val:.4f}) on sparse/mid by >0.002. "
+                    f"Using layer {runner_up}. Note this in paper."
+                )
+            else:
+                best_layer = stage1_winner
+                log.info(
+                    f"Stage 1 winner (layer {stage1_winner}) confirmed by Stage 2. "
+                    f"Margin vs runner-up: {s1_val - s2_val:+.4f}"
+                )
+        else:
+            best_layer = stage1_winner
+            log.info(
+                f"Stage 2 insufficient data — keeping Stage 1 winner: {best_layer}"
+            )
+
+        # ── Outputs ───────────────────────────────────────────────────────────
+        results = {
+            "stage1": {str(k): v for k, v in stage1_scores.items()},
+            "stage2": {str(k): v for k, v in stage2_scores.items()},
+            "best_layer": best_layer,
+            "stage2_winner": best_layer,
+            "stage1_authors": stage1_authors,
+            "stage1_alphas": stage1_alphas,
+            "stage2_alpha": stage2_alpha,
+            "n_stage1_passes": (
+                len(stage1_authors) * stage1_n_articles
+                * len(layer_indices) * len(stage1_alphas)
+            ),
+            "n_stage2_passes": len(stage2_authors) * len(top2_layers),
+        }
+
+        eval_dir = cfg.paths.outputs_dir / "evaluation"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+
+        json_path = eval_dir / "layer_sweep.json"
+        save_json(results, json_path)
+        log.info(f"Saved layer sweep JSON: {json_path}")
+
+        # Plot: two lines (Stage 1 and Stage 2) + vertical line for best layer
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
 
-            layers = sorted(results.keys())
-            scores = [results[l] for l in layers]
-            plt.figure(figsize=(8, 5))
-            plt.plot(layers, scores, "o-", linewidth=2, markersize=8)
-            plt.xlabel("Transformer Layer", fontsize=12)
-            plt.ylabel("Average Style Vector Norm", fontsize=12)
-            plt.title("Layer Sweep: Style Vector Magnitude by Layer", fontsize=14)
-            plt.grid(True, alpha=0.3)
+            fig, ax = plt.subplots(figsize=(9, 5))
+            s1_layers = sorted(stage1_scores.keys())
+            ax.plot(
+                s1_layers, [stage1_scores[l] for l in s1_layers],
+                "o-", linewidth=2, markersize=8,
+                label="Stage 1 (rich, avg 3 alphas)", color="#534AB7",
+            )
+            if stage2_scores:
+                s2_layers = sorted(stage2_scores.keys())
+                ax.plot(
+                    s2_layers, [stage2_scores[l] for l in s2_layers],
+                    "s--", linewidth=2, markersize=8,
+                    label=f"Stage 2 (sparse+mid, α={stage2_alpha})", color="#D85A30",
+                )
+            ax.axvline(
+                x=best_layer, color="gray", linestyle=":", linewidth=1.5,
+                label=f"Best layer = {best_layer}",
+            )
+            ax.set_xlabel("Transformer Layer", fontsize=12)
+            ax.set_ylabel("ROUGE-L", fontsize=12)
+            ax.set_title("Layer Sweep: Style Vector Quality by Layer", fontsize=14)
+            ax.legend(fontsize=10)
+            ax.grid(True, alpha=0.3)
             plt.tight_layout()
-            plot_path = cfg.paths.outputs_dir / "layer_sweep.png"
+            plot_path = eval_dir / "layer_sweep.png"
             plt.savefig(plot_path, dpi=150)
             plt.close()
             log.info(f"Saved layer sweep plot: {plot_path}")
         except ImportError:
             log.warning("matplotlib not available — skipping plot")
+
+        log.info("\n" + "═" * 60)
+        log.info("LAYER SWEEP COMPLETE")
+        log.info(f"  Best layer : {best_layer}")
+        log.info(f"  Stage 1    : { {k: f'{v:.4f}' for k, v in stage1_scores.items()} }")
+        log.info(f"  Stage 2    : { {k: f'{v:.4f}' for k, v in stage2_scores.items()} }")
+        log.info(f"  → Set cfg.model.best_layer = {best_layer} before Phase 3")
+        log.info("═" * 60)
 
         return results
 
@@ -540,26 +850,51 @@ class StyleVectorExtractor:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    parser = argparse.ArgumentParser(description="Style Vector Extraction")
-    parser.add_argument("--model-path", default=str(Path(cfg.model.base_model)))
+    parser = argparse.ArgumentParser(description="Style Vector Extraction + Layer Sweep")
+    parser.add_argument(
+        "--model-path", default=str(Path(cfg.model.base_model)),
+        help="Path to local base model directory",
+    )
     parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4", "both"])
     parser.add_argument("--layers", default="15,18,21,24,27")
     parser.add_argument("--output-dir", default=str(cfg.paths.vectors_dir))
     parser.add_argument("--resume", action="store_true", default=True)
-    parser.add_argument("--run-layer-sweep", action="store_true")
+    parser.add_argument("--no-resume", dest="resume", action="store_false")
+
+    # Layer sweep (Phase 2C) — run separately after Phase 2B extraction
+    parser.add_argument(
+        "--run-layer-sweep", action="store_true",
+        help="Run two-stage ROUGE-L layer sweep (Phase 2C). "
+             "Requires Phase 2B extraction to be complete first.",
+    )
+    parser.add_argument(
+        "--sweep-stage1-authors",
+        default="ananya_das,yash_nitish_bajaj,mahima_pandey,neeshita_nyayapati",
+        help="Comma-separated locked Stage 1 authors (must have ≥20 val articles each)",
+    )
+    parser.add_argument(
+        "--sweep-n-articles", type=int, default=20,
+        help="Val articles per author in Stage 1",
+    )
+    parser.add_argument(
+        "--sweep-alphas", default="0.3,0.5,0.7",
+        help="Comma-separated alpha values for Stage 1 averaging",
+    )
     args = parser.parse_args()
 
     set_seed(cfg.training.seed)
     layer_indices = [int(x) for x in args.layers.split(",")]
 
-    # ESV-Bug 1: verify model exists before loading (saves 5 minutes of silent failure)
+    # Verify model path before loading — saves 5 min of silent failure
     model_path = Path(args.model_path)
     assert model_path.exists(), (
         f"Model not found: {model_path.resolve()}\n"
-        f"Default is 'models/Llama-3.1-8B-Instruct'. Pass --model-path to override."
+        f"Default: 'models/Llama-3.1-8B-Instruct'. Override with --model-path."
     )
     log.info(f"Model path verified: {model_path.resolve()}")
 
+    import socket
+    log.info(f"Host: {socket.gethostname()}")
     log.info("=" * 60)
     log.info("STYLE VECTOR EXTRACTION")
     log.info("=" * 60)
@@ -577,7 +912,8 @@ def main():
                 f"Agnostic headlines not found: {agnostic_csv}\n"
                 f"Run: python -m src.pipeline.agnostic_gen --dataset indian"
             )
-        log.info("\n--- Indian Journalists ---")
+        log.info(f"\n--- Indian Journalists ---")
+        log.info(f"Host: {socket.gethostname()} | Writing to: {(output_dir / 'indian').resolve()}")
         tracker.snapshot("start_indian")
         extractor.extract_all_authors(
             train_dir=cfg.paths.indian_processed_dir,
@@ -596,7 +932,8 @@ def main():
                 f"Agnostic headlines not found: {agnostic_csv}\n"
                 f"Run: python -m src.pipeline.agnostic_gen --dataset lamp4"
             )
-        log.info("\n--- LaMP-4 Rich Users ---")
+        log.info(f"\n--- LaMP-4 Rich Users ---")
+        log.info(f"Host: {socket.gethostname()} | Writing to: {(output_dir / 'lamp4').resolve()}")
         tracker.snapshot("start_lamp4")
         extractor.extract_all_authors(
             train_dir=cfg.paths.lamp4_processed_dir,
@@ -608,22 +945,25 @@ def main():
         )
         tracker.snapshot("done_lamp4")
 
-        # ESV-Bug 4: write sentinel so cold_start.py can gate on completion
-        import socket
+        # Write sentinel so cold_start.py knows LaMP-4 SV extraction is complete
         sentinel = output_dir / "lamp4" / "EXTRACTION_DONE"
         sentinel.touch()
         log.info(f"Sentinel written by {socket.gethostname()}: {sentinel.resolve()}")
 
     if args.run_layer_sweep:
-        log.info("\n--- Layer Sweep ---")
-        extractor.layer_sweep_on_val(
+        log.info("\n--- Two-Stage ROUGE-L Layer Sweep ---")
+        stage1_authors = [a.strip() for a in args.sweep_stage1_authors.split(",")]
+        stage1_alphas = [float(x) for x in args.sweep_alphas.split(",")]
+        extractor.layer_sweep_rouge_l(
             val_jsonl=cfg.paths.indian_val_jsonl,
-            agnostic_csv=cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
             style_vector_dir=output_dir / "indian",
             layer_indices=layer_indices,
+            stage1_authors=stage1_authors,
+            stage1_n_articles=args.sweep_n_articles,
+            stage1_alphas=stage1_alphas,
         )
 
-    report = tracker.stop()
+    tracker.stop()
     log.info("\n✓ Style vector extraction complete")
 
 

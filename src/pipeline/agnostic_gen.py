@@ -36,7 +36,9 @@ CHECK:
 
 FIELD CONTRACT (do NOT change without updating extract_style_vectors.py):
   Indian  : article_field="article_body", id_field="url"
-  LaMP-4  : article_field="article_text", id_field="lamp4_id"
+  LaMP-4  : article_field="article_text", id_field="id" (= "{user_id}_p{idx}" synthetic key)
+            CSV 'id' column matches _expand_lamp4_profiles() output.
+            extract_style_vectors.py looks up art.get("id") for LaMP-4 records.
 
 LOADING STRATEGY:
   No bitsandbytes/quantization. Load in float16 directly.
