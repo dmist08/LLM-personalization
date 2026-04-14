@@ -258,12 +258,12 @@ class StyleVectorExtractor:
             pos_text = f"{prompt} {real_headline}"
             neg_text = f"{prompt} {agnostic_hl}"
 
-            # Extract activations
+            # Extract activations (768 tokens: 400 words ≈ 520 + 30 prompt + 20 headline)
             pos_acts = self.extractor.extract_activations(
-                pos_text, [layer_idx], max_length=512
+                pos_text, [layer_idx], max_length=768
             )
             neg_acts = self.extractor.extract_activations(
-                neg_text, [layer_idx], max_length=512
+                neg_text, [layer_idx], max_length=768
             )
 
             if layer_idx in pos_acts and layer_idx in neg_acts:
@@ -334,11 +334,12 @@ class StyleVectorExtractor:
             neg_text = f"{prompt} {agnostic_hl}"
 
             # Single forward pass captures ALL layers simultaneously
+            # 768 tokens: 400 words ≈ 520 + 30 prompt + 20 headline
             pos_acts = self.extractor.extract_activations(
-                pos_text, layer_indices, max_length=512
+                pos_text, layer_indices, max_length=768
             )
             neg_acts = self.extractor.extract_activations(
-                neg_text, layer_indices, max_length=512
+                neg_text, layer_indices, max_length=768
             )
 
             for l in layer_indices:
