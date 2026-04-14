@@ -46,6 +46,7 @@ LOADING STRATEGY:
 
 import argparse
 import csv
+import json
 import re
 import sys
 import time
@@ -181,6 +182,76 @@ def _validate_output_csv(output_csv: Path, dataset_label: str) -> bool:
         log.error("  ✗ VALIDATION FAILED — this CSV must be regenerated with --no-resume")
 
     return passed
+
+
+def _expand_lamp4_profiles(
+    input_path: Path,
+    output_path: Path,
+    min_profile_size: int = 50,
+    max_articles_per_user: int = 100,
+    max_users: int = 500,
+) -> int:
+    """
+    Expand LaMP-4 user records into individual profile article records.
+
+    LaMP-4 structure: each record is 1 user with a profile[] array.
+    Style vector extraction needs 1 agnostic headline per profile article,
+    not per user. This function flattens profiles into individual records
+    keyed by '{user_id}_p{idx}' for correct lookup in extraction.
+
+    Only includes users with >= min_profile_size profile articles
+    (rich users destined for the cluster pool).
+    Caps at max_users (default 500) to match extraction pipeline.
+    Uses deterministic slicing [:max_articles_per_user], NOT random.sample,
+    so indices match between agnostic gen and extraction.
+
+    Returns number of expanded records written.
+    """
+    import random
+    records = load_jsonl(input_path)
+    
+    # Collect all rich users
+    rich_users = []
+    for r in records:
+        user_id = str(r.get("lamp4_id", r.get("user_id", "")))
+        profile = r.get("profile", [])
+        if len(profile) >= min_profile_size:
+            rich_users.append((user_id, profile))
+    
+    log.info(f"Found {len(rich_users)} rich users (>={min_profile_size} profile articles)")
+    
+    # Sort by user_id string — must match extract_style_vectors.py's
+    # sorted(by_user.items()) ordering for random.sample reproducibility
+    rich_users.sort(key=lambda x: x[0])
+    
+    # Cap at max_users — must match extract_style_vectors.py selection
+    # Uses same random.seed(42) + random.sample as extraction for consistency
+    if len(rich_users) > max_users:
+        random.seed(42)
+        rich_users = random.sample(rich_users, max_users)
+        log.info(f"Capped to {max_users} users (random.seed(42) for reproducibility)")
+    
+    expanded = []
+    for user_id, profile in rich_users:
+        # Deterministic slice — same ordering as extract_style_vectors.py
+        for idx, art in enumerate(profile[:max_articles_per_user]):
+            expanded.append({
+                "id": f"{user_id}_p{idx}",
+                "user_id": user_id,
+                "article_text": art.get("article_text", art.get("text", "")),
+                "headline": art.get("headline", art.get("title", "")),
+            })
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        for rec in expanded:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    log.info(
+        f"Expanded {len(rich_users)} LaMP-4 users → "
+        f"{len(expanded):,} profile articles → {output_path}"
+    )
+    return len(expanded)
 
 
 def _truncate_to_sentence(text: str, max_words: int = 400) -> str:
@@ -476,11 +547,23 @@ def main() -> None:
             "indian",
         ))
     if args.dataset in ("lamp4", "both"):
+        # LaMP-4: each record has a profile[] of many articles.
+        # We need 1 agnostic headline per PROFILE article (not per user).
+        # Expand profiles into flat records before generation.
+        expanded_jsonl = cfg.paths.interim_dir / "lamp4_expanded_profiles.jsonl"
+        if not args.validate_only:
+            _expand_lamp4_profiles(
+                input_path=cfg.paths.lamp4_processed_dir / "train.jsonl",
+                output_path=expanded_jsonl,
+                min_profile_size=50,
+                max_articles_per_user=cfg.model.lamp4_max_profile_articles,
+                max_users=cfg.model.lamp4_max_users,
+            )
         dataset_configs.append((
-            cfg.paths.lamp4_processed_dir / "train.jsonl",
+            expanded_jsonl,
             cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv",
-            "article_text",   # LaMP-4 field name — confirmed from JSONL inspection
-            "lamp4_id",       # LaMP-4 lookup key
+            "article_text",   # field in expanded records
+            "id",             # synthetic key: "{user_id}_p{idx}"
             "lamp4",
         ))
 

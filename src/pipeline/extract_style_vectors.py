@@ -283,17 +283,16 @@ class StyleVectorExtractor:
         diffs: dict[int, list] = {l: [] for l in layer_indices}
         skipped = 0
 
-        for art in train_articles:
+        for art_idx, art in enumerate(train_articles):
             article_text = format_article_for_prompt(
                 art.get("article_body") or art.get("article_text", ""), max_words=400
             )
             real_headline = art.get("headline") or art.get("title", "")
 
-            # Agnostic lookup
+            # Agnostic lookup — key format must match agnostic_gen.py output
             if dataset == "lamp4":
-                agnostic_hl = agnostic_headlines.get(str(author_id))
-                if not agnostic_hl and real_headline:
-                    agnostic_hl = "News Update: " + real_headline
+                # Key: "{user_id}_p{idx}" — matches _expand_lamp4_profiles() output
+                agnostic_hl = agnostic_headlines.get(f"{author_id}_p{art_idx}")
             else:
                 art_id = art.get("url") or art.get("lamp4_id") or ""
                 agnostic_hl = agnostic_headlines.get(str(art_id))
@@ -397,8 +396,10 @@ class StyleVectorExtractor:
             for uid, arts in authors:
                 profile = arts[0].get("profile", [])
                 if len(profile) >= 50:  # Only rich users for cluster pool
-                    if len(profile) > MAX_PROFILE_ARTICLES:
-                        profile = random.sample(profile, MAX_PROFILE_ARTICLES)
+                    # Deterministic slice — NOT random.sample — because
+                    # agnostic_gen.py uses the same ordering to assign
+                    # per-article keys ({user_id}_p{idx}).
+                    profile = profile[:MAX_PROFILE_ARTICLES]
                     authors_with_profiles.append((uid, profile))
             # Randomly sample MAX_USERS for tractable runtime
             if len(authors_with_profiles) > MAX_USERS:
