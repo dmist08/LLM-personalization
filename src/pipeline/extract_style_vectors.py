@@ -433,17 +433,16 @@ class StyleVectorExtractor:
                 profile_raw = arts[0].get("profile", [])
                 if len(profile_raw) >= 50:
                     # Structure A — normalize profile sub-object fields to match
-                    # the field names expected by extract_author_vector_multilayer:
-                    # profile items use "text"→article_text, "output"→headline
-                    # CRITICAL: We must inject the synthetic 'id' key exactly
-                    # as agnostic_gen.py _expand_lamp4_profiles() did.
+                    # the field names expected by extract_author_vector_multilayer.
+                    # Profile items: "article_text" (sometimes "text"), "headline" (sometimes "output")
+                    # CRITICAL: profile sub-objects have NO id field. We must construct
+                    # the same '{user_id}_p{idx}' key that agnostic_gen.py wrote to the CSV.
                     normalized = []
                     for idx, item in enumerate(profile_raw[:MAX_PROFILE_ARTICLES]):
                         normalized.append({
-                            "id":           f"{uid}_p{idx}",
-                            "article_text": item.get("text", item.get("article_text", "")),
-                            "headline":     item.get("output", item.get("headline", "")),
-                            "lamp4_id":     item.get("lamp4_id", item.get("id", "")),
+                            "article_text": item.get("article_text", item.get("text", "")),
+                            "headline":     item.get("headline", item.get("output", "")),
+                            "id":           f"{uid}_p{idx}",  # synthetic key matching CSV
                         })
                     authors_with_profiles.append((uid, normalized))
                 elif len(arts) >= 50:
