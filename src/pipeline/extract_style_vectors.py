@@ -435,9 +435,12 @@ class StyleVectorExtractor:
                     # Structure A — normalize profile sub-object fields to match
                     # the field names expected by extract_author_vector_multilayer:
                     # profile items use "text"→article_text, "output"→headline
+                    # CRITICAL: We must inject the synthetic 'id' key exactly
+                    # as agnostic_gen.py _expand_lamp4_profiles() did.
                     normalized = []
-                    for item in profile_raw[:MAX_PROFILE_ARTICLES]:
+                    for idx, item in enumerate(profile_raw[:MAX_PROFILE_ARTICLES]):
                         normalized.append({
+                            "id":           f"{uid}_p{idx}",
                             "article_text": item.get("text", item.get("article_text", "")),
                             "headline":     item.get("output", item.get("headline", "")),
                             "lamp4_id":     item.get("lamp4_id", item.get("id", "")),
