@@ -251,8 +251,13 @@ class RAGBaseline:
         self._indices = self._load_author_indices(train_dir)
 
         # Load author metadata for class info
-        metadata_path = test_dir.parent / "author_metadata.json"
+        metadata_path = test_dir / "author_metadata.json"
+        if not metadata_path.exists():
+            # Fallback: check parent directory
+            metadata_path = test_dir.parent / "author_metadata.json"
         metadata = load_json(metadata_path) if metadata_path.exists() else {}
+        if not metadata:
+            log.warning(f"No metadata loaded from {metadata_path} — author_class will be 'unknown'")
 
         # Determine which authors to evaluate
         if author_ids:
@@ -328,6 +333,7 @@ class RAGBaseline:
                         "author_name": author_name,
                         "author_class": author_class,
                         "source": source,
+                        "url": art.get("url", ""),
                         "article_text": article_text,
                         "ground_truth": ground_truth,
                         "base_output": base_output,
