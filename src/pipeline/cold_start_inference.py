@@ -54,10 +54,10 @@ AGNOSTIC_PROMPT = (
 )
 
 
-def _truncate_to_sentence(text: str, max_words: int = 500) -> str:
+def _truncate_to_sentence(text: str, max_words: int = 400) -> str:
     """
     Truncate article to ≤max_words, ending at a sentence boundary (.!?).
-    Mid-sentence cuts make LLaMA continue the article instead of generating a headline.
+    400 words is the canonical limit matching agnostic_gen.py.
     """
     words = text.split()
     if len(words) <= max_words:
@@ -133,7 +133,7 @@ def generate_with_steering(
     input vector has been interpolated with a cluster centroid.
     """
     # Sentence-boundary truncation (same fix as agnostic_gen)
-    article = _truncate_to_sentence(article, max_words=500)
+    article = _truncate_to_sentence(article, max_words=400)
     
     # Build prompt and wrap with chat template (required for LLaMA-3.1-Instruct)
     raw_prompt = AGNOSTIC_PROMPT.format(article=article)
@@ -192,20 +192,37 @@ def main():
     parser.add_argument("--test-dir", default=None)
     parser.add_argument("--cold-start-dir", default=None)
     parser.add_argument("--output-path", default=None)
+    parser.add_argument(
+        "--metadata",
+        default=str(Path("data/processed/indian/author_metadata.json")),
+        help="Author metadata JSON for author_class lookup",
+    )
     args = parser.parse_args()
 
     # Apply dataset-specific defaults
     ds = DATASET_CONFIG[args.dataset]
     if args.test_dir is None:
         args.test_dir = ds["test_dir"]
+    # Issue 3: derive cold_start_dir from alpha to keep them in sync
     if args.cold_start_dir is None:
-        args.cold_start_dir = ds["cold_start_dir"]
+        args.cold_start_dir = f"author_vectors/cold_start/alpha_{args.alpha}"
+        log.info(f"Cold-start dir derived from --alpha={args.alpha}: {args.cold_start_dir}")
     if args.output_path is None:
         args.output_path = ds["output_file"]
 
     Path("logs").mkdir(exist_ok=True)
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load metadata for author_class (W1/W2 fix)
+    metadata = {}
+    meta_path = Path(args.metadata)
+    if meta_path.exists():
+        with open(meta_path, encoding="utf-8") as f:
+            metadata = json.load(f)
+        log.info(f"Metadata loaded: {len(metadata)} authors")
+    else:
+        log.warning(f"Metadata not found at {meta_path} — author_class will be empty")
 
     # GPU tracking
     tracker = GPUTracker("cold_start_inference")
@@ -245,12 +262,18 @@ def main():
 
     # Check available cold-start vectors
     cs_dir = Path(args.cold_start_dir)
-    available_vectors = {f.stem for f in cs_dir.glob("*.npy")} if cs_dir.exists() else set()
-    log.info(f"Cold-start vectors available: {len(available_vectors)}")
+    available_cs = {f.stem for f in cs_dir.glob("*.npy")} if cs_dir.exists() else set()
+    log.info(f"Cold-start vectors available: {len(available_cs)}")
+
+    # Direct SV fallback dir for rich authors (Issue 4)
+    direct_sv_dir = Path(f"author_vectors/indian/layer_{args.layer}")
+    available_direct = {f.stem for f in direct_sv_dir.glob("*.npy")} if direct_sv_dir.exists() else set()
+    log.info(f"Direct SV vectors available: {len(available_direct)} (fallback for rich authors)")
 
     out_f = open(output_path, "a", encoding="utf-8")
     written = 0
     skipped = 0
+    rich_fallback = 0
     errors = 0
     start_time = time.time()
 
@@ -261,10 +284,19 @@ def main():
         if (author_id, article_id) in done_ids:
             continue
 
+        # Try cold-start vector first, then fallback to direct SV for rich authors
         sv = load_cold_start_vector(args.cold_start_dir, author_id)
+        vector_source = "cold_start"
         if sv is None:
-            skipped += 1
-            continue
+            # Issue 4: Rich authors have no CS vector — use direct style vector
+            direct_path = direct_sv_dir / f"{author_id}.npy"
+            if direct_path.exists():
+                sv = np.load(direct_path)
+                vector_source = "direct_sv"
+                rich_fallback += 1
+            else:
+                skipped += 1
+                continue
 
         article = rec.get(ds["article_field"], "")
         ground_truth = rec.get(ds["headline_field"], "")
@@ -278,15 +310,18 @@ def main():
             headline = ""
             errors += 1
 
+        # W1/W2: write actual author_class from metadata
+        author_class = metadata.get(author_id, {}).get("class", "")
         result = {
             "author_id": author_id,
-            "author_class": rec.get(ds["class_field"], ""),
+            "author_class": author_class,
             "article_id": article_id,
             "ground_truth": ground_truth,
             "cs_output": headline,
             "dataset": args.dataset,
             "layer": args.layer,
             "alpha": args.alpha,
+            "vector_source": vector_source,
         }
         out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
         out_f.flush()
@@ -307,15 +342,17 @@ def main():
 
     tracker.add_metric("written", written)
     tracker.add_metric("skipped", skipped)
+    tracker.add_metric("rich_fallback", rich_fallback)
     tracker.add_metric("errors", errors)
     report = tracker.stop()
 
     log.info(f"\n{'='*60}")
     log.info(f"COLD-START INFERENCE COMPLETE")
-    log.info(f"  Written:  {written}")
-    log.info(f"  Skipped:  {skipped}")
-    log.info(f"  Errors:   {errors}")
-    log.info(f"  Output:   {output_path}")
+    log.info(f"  Written:        {written}")
+    log.info(f"  Rich fallback:  {rich_fallback} (used direct SV)")
+    log.info(f"  Skipped:        {skipped}")
+    log.info(f"  Errors:         {errors}")
+    log.info(f"  Output:         {output_path}")
     log.info(f"{'='*60}")
 
 

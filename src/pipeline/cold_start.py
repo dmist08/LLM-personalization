@@ -52,6 +52,22 @@ from src.utils import setup_logging, set_seed, load_json, save_json, load_jsonl
 cfg = get_config()
 log = setup_logging("cold_start", cfg.paths.logs_dir)
 
+
+def _truncate_to_sentence(text: str, max_words: int = 400) -> str:
+    """
+    Truncate article to ≤max_words, ending at a sentence boundary (.!?).
+    Same helper as in agnostic_gen, sv_inference, cs_inference.
+    400 words is the canonical limit matching agnostic_gen.py.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    truncated = " ".join(words[:max_words])
+    for i in range(len(truncated) - 1, max(0, len(truncated) - 300), -1):
+        if truncated[i] in ".!?":
+            return truncated[: i + 1]
+    return truncated
+
 # LOCKED PROMPT — identical across agnostic_gen, extract_style_vectors, sweeps.
 # Do NOT change wording without updating ALL scripts.
 AGNOSTIC_PROMPT = (
@@ -305,12 +321,10 @@ class ColdStartInterpolator:
         interp_50d = alpha * sparse_50d + (1 - alpha) * nearest_centroid_50d
 
         # Project back to 4096D
+        # NOT L2-normalized — raw SV vectors from extract_style_vectors.py are
+        # also unnormalized. Keeping the same scale ensures alpha has the same
+        # effect in both SV inference and CS inference.
         interp_4096d = self.pca.inverse_transform(interp_50d.reshape(1, -1))[0]
-
-        # L2-normalize
-        norm = np.linalg.norm(interp_4096d)
-        if norm > 0:
-            interp_4096d = interp_4096d / norm
 
         return interp_4096d
 
@@ -488,13 +502,9 @@ class ColdStartInterpolator:
                     if not article.strip() or not ground_truth.strip():
                         continue
 
-                    # Format article
-                    words = article.split()[:400]
-                    article_truncated = " ".join(words)
-                    for i in range(len(article_truncated) - 1, max(0, len(article_truncated) - 300), -1):
-                        if article_truncated[i] in ".!?":
-                            article_truncated = article_truncated[:i + 1]
-                            break
+                    # Truncate article — 400 words, sentence boundary
+                    # Must match agnostic_gen.py and both inference scripts
+                    article_truncated = _truncate_to_sentence(article, max_words=400)
 
                     raw_prompt = AGNOSTIC_PROMPT.format(article=article_truncated)
                     prompt = tokenizer.apply_chat_template(

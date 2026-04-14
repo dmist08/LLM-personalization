@@ -52,10 +52,10 @@ AGNOSTIC_PROMPT = (
 )
 
 
-def _truncate_to_sentence(text: str, max_words: int = 500) -> str:
+def _truncate_to_sentence(text: str, max_words: int = 400) -> str:
     """
     Truncate article to ≤max_words, ending at a sentence boundary (.!?).
-    Mid-sentence cuts make LLaMA continue the article instead of generating a headline.
+    400 words is the canonical limit matching agnostic_gen.py.
     """
     words = text.split()
     if len(words) <= max_words:
@@ -134,7 +134,7 @@ def generate_with_steering(
     This steers the model toward the author's writing style.
     """
     # Sentence-boundary truncation (same fix as agnostic_gen)
-    article = _truncate_to_sentence(article, max_words=500)
+    article = _truncate_to_sentence(article, max_words=400)
     
     # Build prompt and wrap with chat template (required for LLaMA-3.1-Instruct)
     raw_prompt = AGNOSTIC_PROMPT.format(article=article)
@@ -197,6 +197,11 @@ def main():
     parser.add_argument("--test-dir", default=None)     # Override dataset default
     parser.add_argument("--vectors-dir", default=None)   # Override dataset default
     parser.add_argument("--output-path", default=None)   # Override dataset default
+    parser.add_argument(
+        "--metadata",
+        default=str(Path("data/processed/indian/author_metadata.json")),
+        help="Author metadata JSON for author_class lookup",
+    )
     args = parser.parse_args()
 
     # Apply dataset-specific defaults
@@ -211,6 +216,17 @@ def main():
     Path("logs").mkdir(exist_ok=True)
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load metadata for author_class (W1/W2 fix)
+    metadata = {}
+    meta_path = Path(args.metadata)
+    if meta_path.exists():
+        import json as json_mod
+        with open(meta_path, encoding="utf-8") as f:
+            metadata = json_mod.load(f)
+        log.info(f"Metadata loaded: {len(metadata)} authors")
+    else:
+        log.warning(f"Metadata not found at {meta_path} — author_class will be empty")
 
     # GPU tracking
     tracker = GPUTracker("stylevector_inference")
@@ -278,9 +294,11 @@ def main():
             headline = ""
             errors += 1
 
+        # Write actual author_class from metadata
+        author_class = metadata.get(author_id, {}).get("class", "")
         result = {
             "author_id": author_id,
-            "author_class": rec.get(ds["class_field"], ""),
+            "author_class": author_class,
             "article_id": article_id,
             "ground_truth": ground_truth,
             "sv_output": headline,
