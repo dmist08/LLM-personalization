@@ -687,7 +687,9 @@ data/
                                      Class values: {"rich", "sparse", "mid"}
   interim/
     indian_agnostic_headlines.csv  ← columns: id (url), agnostic_headline [✅ DONE]
-    lamp4_agnostic_headlines.csv   ← columns: id (lamp4_id), agnostic_headline [✅ DONE]
+    lamp4_expanded_profiles.jsonl  ← intermediate: ~48K records, keys {user_id}_p{idx}
+    lamp4_agnostic_headlines.csv   ← columns: id ({user_id}_p{idx}), agnostic_headline
+                                     ~48K rows (1 per PROFILE article, NOT per user)
 
 author_vectors/
   indian/
@@ -750,7 +752,7 @@ logs/
 
 - Indian `author_id`: underscores always (`aishwarya_faraswal`, never `aishwarya-faraswal`)
 - Indian article lookup key in agnostic CSV: `url` field
-- LaMP-4 user lookup key in agnostic CSV: `lamp4_id` field
+- LaMP-4 user lookup key in agnostic CSV: `{user_id}_p{idx}` (per profile article, NOT per user)
 - `author_metadata.json` keys: underscores (confirmed)
 - Vector `.npy` filenames: `{author_id}.npy` with underscores
 - Add assertion at startup of every script that loads metadata:
@@ -787,7 +789,7 @@ python -m src.pipeline.agnostic_gen --validate-only --dataset lamp4
 
 Pass criteria:
 - `indian_agnostic_headlines.csv`: ~6,480 rows, zero empty `agnostic_headline` values, zero prompt echoes
-- `lamp4_agnostic_headlines.csv`: ~12,527 rows, zero empty values
+- `lamp4_agnostic_headlines.csv`: ~48,000 rows (500 rich users × ≤100 profile articles), zero empty values
 - Random sample of 10 headlines looks like wire-service neutral headlines, not prompt text or article fragments
 
 ### Pre-Phase-2B Cleanup
@@ -1693,8 +1695,9 @@ LLM-personalization/
 │   │   └── indian/
 │   │       └── author_metadata.json   ← CONFIRMED LOCATION
 │   └── interim/
-│       ├── indian_agnostic_headlines.csv   ✅ DONE (~6,480 rows)
-│       └── lamp4_agnostic_headlines.csv    ✅ DONE (~12,527 rows)
+│       ├── indian_agnostic_headlines.csv   ✅ (re-gen after bug fixes, ~6,480 rows)
+│       ├── lamp4_expanded_profiles.jsonl   ← intermediate: ~48K records
+│       └── lamp4_agnostic_headlines.csv    ← ~48K rows (per-profile-article)
 │
 ├── author_vectors/
 │   ├── indian/
@@ -1936,7 +1939,7 @@ A phase is not done until every item is checked. "Feels done" is not done.
 - [ ] `author_metadata.json` keys confirmed as underscores
 - [ ] `agnostic_gen.py` fixed: `article_body`, correct path, empty-row skip, `--validate-only`
 - [ ] Indian agnostic CSV: ~6,480 rows, zero empty headlines, zero prompt echoes
-- [ ] LaMP-4 agnostic CSV: ~12,527 rows, zero empty headlines
+- [ ] LaMP-4 agnostic CSV: ~48,000 rows (500 rich users × ≤100 profile articles), zero empty headlines
 - [ ] Both CSVs validated with `--validate-only` flag (run this before Phase 2B)
 
 ### Phase 2B — Style Vector Extraction
