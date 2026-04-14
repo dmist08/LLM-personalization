@@ -277,9 +277,9 @@ def main():
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--smoke-test", action="store_true")
-    parser.add_argument("--num-epochs", type=int, default=cfg.training.num_epochs)
+    parser.add_argument("--num-epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=cfg.training.batch_size)
-    parser.add_argument("--grad-accum", type=int, default=cfg.training.grad_accumulation)
+    parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--lr", type=float, default=cfg.training.learning_rate)
     args = parser.parse_args()
 
@@ -393,7 +393,7 @@ def main():
         save_total_limit=3,
         max_grad_norm=1.0,
         logging_steps=10 if args.smoke_test else 50,
-        dataloader_num_workers=4,
+        dataloader_num_workers=0,
         seed=cfg.training.seed,
         report_to="none",  # Use wandb if available
         remove_unused_columns=False,
