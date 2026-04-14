@@ -121,7 +121,7 @@ class ModelConfig:
     lamp4_max_profile_articles: int = 100  # max articles per user
     # Set after Phase 2C and Phase 3 respectively — None means "not yet determined"
     best_layer: int = 15                  # locked after Phase 2C layer sweep (2026-04-15)
-    best_alpha: float = None             # set after alpha sweep
+    best_alpha: float = 0.6             # locked after Phase 3 alpha sweep (2026-04-15)
 
 
 @dataclass
