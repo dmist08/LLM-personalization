@@ -552,6 +552,14 @@ def main():
     set_seed(cfg.training.seed)
     layer_indices = [int(x) for x in args.layers.split(",")]
 
+    # ESV-Bug 1: verify model exists before loading (saves 5 minutes of silent failure)
+    model_path = Path(args.model_path)
+    assert model_path.exists(), (
+        f"Model not found: {model_path.resolve()}\n"
+        f"Default is 'models/Llama-3.1-8B-Instruct'. Pass --model-path to override."
+    )
+    log.info(f"Model path verified: {model_path.resolve()}")
+
     log.info("=" * 60)
     log.info("STYLE VECTOR EXTRACTION")
     log.info("=" * 60)
@@ -599,6 +607,12 @@ def main():
             resume=args.resume,
         )
         tracker.snapshot("done_lamp4")
+
+        # ESV-Bug 4: write sentinel so cold_start.py can gate on completion
+        import socket
+        sentinel = output_dir / "lamp4" / "EXTRACTION_DONE"
+        sentinel.touch()
+        log.info(f"Sentinel written by {socket.gethostname()}: {sentinel.resolve()}")
 
     if args.run_layer_sweep:
         log.info("\n--- Layer Sweep ---")
