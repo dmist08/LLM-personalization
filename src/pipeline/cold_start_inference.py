@@ -6,16 +6,11 @@ for activation-steered headline generation. This is the NOVEL CONTRIBUTION.
 
 RUN (Indian):
   python -m src.pipeline.cold_start_inference \
-    --model-path checkpoints/qlora/merged \
+    --model-path models/Llama-3.1-8B-Instruct \
     --dataset indian
 
-RUN (LaMP-4):
-  python -m src.pipeline.cold_start_inference \
-    --model-path checkpoints/qlora/merged \
-    --dataset lamp4
-
 OUTPUT:
-  outputs/cold_start_outputs.jsonl
+  outputs/cold_start/cs_base_outputs.jsonl
   logs/gpu_tracking/cold_start_inference_*.json
 """
 
@@ -28,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -48,22 +43,40 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-PROMPT_TEMPLATE = (
-    "Generate a concise news headline for the following article:\n\n"
+# LOCKED PROMPT — identical across agnostic_gen, extract_style_vectors, sweeps.
+# Do NOT change wording without updating ALL scripts.
+AGNOSTIC_PROMPT = (
+    "Write ONLY a single neutral, factual news headline for the following article. "
+    "Output ONLY the headline text, nothing else. No explanation, no quotes, no prefix.\n\n"
     "{article}\n\nHeadline:"
 )
+
+
+def _truncate_to_sentence(text: str, max_words: int = 500) -> str:
+    """
+    Truncate article to ≤max_words, ending at a sentence boundary (.!?).
+    Mid-sentence cuts make LLaMA continue the article instead of generating a headline.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    truncated = " ".join(words[:max_words])
+    for i in range(len(truncated) - 1, max(0, len(truncated) - 300), -1):
+        if truncated[i] in ".!?":
+            return truncated[: i + 1]
+    return truncated
 
 
 # Dataset-specific config
 DATASET_CONFIG = {
     "indian": {
-        "test_file": "all_test.jsonl",
-        "test_dir": "data/processed/indian",
+        "test_file": "indian_test.jsonl",
+        "test_dir": "data/splits",
         "cold_start_dir": "author_vectors/cold_start/alpha_0.5",
-        "output_file": "outputs/cold_start_outputs.jsonl",
+        "output_file": "outputs/cold_start/cs_base_outputs.jsonl",
         "id_field": "author_id",
         "class_field": "author_class",
-        "article_field": "article_text",
+        "article_field": "article_body",
         "headline_field": "headline",
         "article_id_field": "url",
     },
@@ -117,13 +130,18 @@ def generate_with_steering(
     Identical mechanism to StyleVector inference — the difference is the
     input vector has been interpolated with a cluster centroid.
     """
-    article_words = article.split()
-    if len(article_words) > 500:
-        article = " ".join(article_words[:500])
+    # Sentence-boundary truncation (same fix as agnostic_gen)
+    article = _truncate_to_sentence(article, max_words=500)
     
-    prompt = PROMPT_TEMPLATE.format(article=article)
+    # Build prompt and wrap with chat template (required for LLaMA-3.1-Instruct)
+    raw_prompt = AGNOSTIC_PROMPT.format(article=article)
+    prompt = tokenizer.apply_chat_template(
+        [{"role": "user", "content": raw_prompt}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
     inputs = tokenizer(
-        prompt, return_tensors="pt", truncation=True, max_length=512
+        prompt, return_tensors="pt", truncation=True, max_length=768
     ).to(device)
     prompt_len = inputs["input_ids"].shape[1]
 
@@ -212,7 +230,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
         local_files_only=is_local,
-        quantization_config=BitsAndBytesConfig(load_in_8bit=True),
         device_map="auto",
         torch_dtype=torch.float16,
     )

@@ -50,8 +50,12 @@ from src.utils import (
 )
 from src.utils_gpu import GPUTracker
 
-PROMPT_TEMPLATE = (
-    "Generate a concise news headline for the following article:\n\n"
+# LOCKED PROMPT — identical across agnostic_gen, extract_style_vectors, sweeps.
+# Do NOT change wording without updating ALL scripts.
+# Verify: grep -r "Write ONLY a single neutral" src/ should match agnostic_gen.py
+AGNOSTIC_PROMPT = (
+    "Write ONLY a single neutral, factual news headline for the following article. "
+    "Output ONLY the headline text, nothing else. No explanation, no quotes, no prefix.\n\n"
     "{article}\n\nHeadline:"
 )
 
@@ -145,27 +149,31 @@ class StyleVectorExtractor:
 
     def __init__(self, model_path: str):
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        log.info(f"Loading merged model: {model_path}")
+        model_path_obj = Path(model_path)
+        assert model_path_obj.exists(), (
+            f"Model not found: {model_path_obj.resolve()}\n"
+            f"Expected local model directory. Check config or --model-path."
+        )
 
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-        is_local = Path(model_path).exists()
+        log.info(f"Loading base model: {model_path} (float16, no quantization)")
+
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            quantization_config=bnb_config,
             device_map="auto",
-            torch_dtype=torch.bfloat16,
-            local_files_only=is_local,
+            torch_dtype=torch.float16,
+            local_files_only=True,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
-            local_files_only=is_local,
+            local_files_only=True,
         )
         self.model.eval()
 
         allocated = torch.cuda.memory_allocated() / 1e9
-        log.info(f"Model loaded. GPU memory: {allocated:.1f} GB")
+        reserved = torch.cuda.memory_reserved() / 1e9
+        log.info(f"Model loaded. GPU allocated: {allocated:.1f}GB | reserved: {reserved:.1f}GB")
 
         self.extractor: Optional[ActivationExtractor] = None
 
@@ -198,7 +206,7 @@ class StyleVectorExtractor:
 
         for art in train_articles:
             article_text = format_article_for_prompt(
-                art.get("article_text") or art.get("text", ""), max_words=400
+                art.get("article_body") or art.get("article_text", ""), max_words=400
             )
             real_headline = art.get("headline") or art.get("title", "")
 
@@ -222,7 +230,7 @@ class StyleVectorExtractor:
                 continue
 
             # Build positive and negative texts
-            prompt = PROMPT_TEMPLATE.format(article=article_text)
+            prompt = AGNOSTIC_PROMPT.format(article=article_text)
             pos_text = f"{prompt} {real_headline}"
             neg_text = f"{prompt} {agnostic_hl}"
 
@@ -277,7 +285,7 @@ class StyleVectorExtractor:
 
         for art in train_articles:
             article_text = format_article_for_prompt(
-                art.get("article_text") or art.get("text", ""), max_words=400
+                art.get("article_body") or art.get("article_text", ""), max_words=400
             )
             real_headline = art.get("headline") or art.get("title", "")
 
@@ -294,7 +302,7 @@ class StyleVectorExtractor:
                 skipped += 1
                 continue
 
-            prompt = PROMPT_TEMPLATE.format(article=article_text)
+            prompt = AGNOSTIC_PROMPT.format(article=article_text)
             pos_text = f"{prompt} {real_headline}"
             neg_text = f"{prompt} {agnostic_hl}"
 
@@ -348,15 +356,23 @@ class StyleVectorExtractor:
 
         # Determine authors to process
         if dataset == "indian":
-            # Per-author subdirectories
-            author_dirs = [d for d in train_dir.iterdir() if d.is_dir()]
-            authors = []
-            for d in sorted(author_dirs):
-                train_file = d / "train.jsonl"
-                if train_file.exists():
-                    articles = load_jsonl(train_file)
-                    if articles:
-                        authors.append((d.name, articles))
+            # Read from flat JSONL (canonical source with underscore author_ids)
+            # NOT from per-author subdirectories (which have hyphen names)
+            train_jsonl = cfg.paths.indian_train_jsonl
+            if not train_jsonl.exists():
+                raise FileNotFoundError(
+                    f"Indian train JSONL not found: {train_jsonl}\n"
+                    f"Expected at: {train_jsonl.resolve()}"
+                )
+            records = load_jsonl(train_jsonl)
+            from collections import defaultdict
+            by_author = defaultdict(list)
+            for r in records:
+                aid = r.get("author_id", "")
+                if aid:
+                    by_author[aid].append(r)
+            authors = [(aid, arts) for aid, arts in sorted(by_author.items())]
+            log.info(f"Loaded {len(records):,} articles for {len(authors)} Indian authors from flat JSONL")
         else:
             # LaMP-4: all records in train.jsonl, group by user_id
             train_file = train_dir / "train.jsonl"
@@ -372,10 +388,9 @@ class StyleVectorExtractor:
             ]
             # For LaMP-4, use the profile as "training articles"
             # Only use rich users (>=50 articles) for cluster pool
-            # Cap at 15 articles per user — vector stabilizes after ~15 samples
-            # This reduces runtime by ~10-20x with minimal quality loss
-            MAX_PROFILE_ARTICLES = 15
-            MAX_USERS = 2000  # Enough for reliable KMeans clustering
+            # Cap at config values (V4.2 spec: defaults 100 articles, 500 users)
+            MAX_PROFILE_ARTICLES = cfg.model.lamp4_max_profile_articles
+            MAX_USERS = cfg.model.lamp4_max_users
             authors_with_profiles = []
             import random
             random.seed(42)
@@ -387,8 +402,8 @@ class StyleVectorExtractor:
                     authors_with_profiles.append((uid, profile))
             # Randomly sample MAX_USERS for tractable runtime
             if len(authors_with_profiles) > MAX_USERS:
+                log.info(f"Sampling {MAX_USERS} rich users from {len(authors_with_profiles)} total")
                 authors_with_profiles = random.sample(authors_with_profiles, MAX_USERS)
-                log.info(f"Sampled {MAX_USERS} rich users for cluster pool (from {len(authors_with_profiles) + MAX_USERS} total)")
             authors = authors_with_profiles
 
         log.info(f"Authors to process: {len(authors)}")
@@ -525,7 +540,7 @@ class StyleVectorExtractor:
 
 def main():
     parser = argparse.ArgumentParser(description="Style Vector Extraction")
-    parser.add_argument("--model-path", default=str(Path("checkpoints/qlora/merged")))
+    parser.add_argument("--model-path", default=str(Path(cfg.model.base_model)))
     parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4", "both"])
     parser.add_argument("--layers", default="15,18,21,24,27")
     parser.add_argument("--output-dir", default=str(cfg.paths.vectors_dir))
@@ -547,11 +562,17 @@ def main():
     output_dir = Path(args.output_dir)
 
     if args.dataset in ("indian", "both"):
+        agnostic_csv = cfg.paths.interim_dir / "indian_agnostic_headlines.csv"
+        if not agnostic_csv.exists():
+            raise FileNotFoundError(
+                f"Agnostic headlines not found: {agnostic_csv}\n"
+                f"Run: python -m src.pipeline.agnostic_gen --dataset indian"
+            )
         log.info("\n--- Indian Journalists ---")
         tracker.snapshot("start_indian")
         extractor.extract_all_authors(
             train_dir=cfg.paths.indian_processed_dir,
-            agnostic_csv=cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
+            agnostic_csv=agnostic_csv,
             layer_indices=layer_indices,
             output_dir=output_dir / "indian",
             dataset="indian",
@@ -560,11 +581,17 @@ def main():
         tracker.snapshot("done_indian")
 
     if args.dataset in ("lamp4", "both"):
+        agnostic_csv = cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv"
+        if not agnostic_csv.exists():
+            raise FileNotFoundError(
+                f"Agnostic headlines not found: {agnostic_csv}\n"
+                f"Run: python -m src.pipeline.agnostic_gen --dataset lamp4"
+            )
         log.info("\n--- LaMP-4 Rich Users ---")
         tracker.snapshot("start_lamp4")
         extractor.extract_all_authors(
             train_dir=cfg.paths.lamp4_processed_dir,
-            agnostic_csv=cfg.paths.interim_dir / "lamp4_agnostic_headlines.csv",
+            agnostic_csv=agnostic_csv,
             layer_indices=layer_indices,
             output_dir=output_dir / "lamp4",
             dataset="lamp4",
@@ -575,7 +602,7 @@ def main():
     if args.run_layer_sweep:
         log.info("\n--- Layer Sweep ---")
         extractor.layer_sweep_on_val(
-            val_jsonl=cfg.paths.indian_processed_dir / "all_val.jsonl",
+            val_jsonl=cfg.paths.indian_val_jsonl,
             agnostic_csv=cfg.paths.interim_dir / "indian_agnostic_headlines.csv",
             style_vector_dir=output_dir / "indian",
             layer_indices=layer_indices,

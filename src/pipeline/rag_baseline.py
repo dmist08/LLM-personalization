@@ -60,7 +60,7 @@ class AuthorBM25Index:
 
         # Tokenize: lowercase, split on whitespace
         self._corpus = [
-            a.get("article_text", "").lower().split()
+            (a.get("article_body") or a.get("article_text", "")).lower().split()
             for a in train_articles
         ]
 
@@ -114,7 +114,7 @@ class RAGPromptBuilder:
 
         for ex in retrieved_examples:
             ex_article = format_article_for_prompt(
-                ex.get("article_text", ""), self.max_article_words
+                ex.get("article_body") or ex.get("article_text", ""), self.max_article_words
             )
             ex_headline = ex.get("headline", "")
             parts.append(f"Article: {ex_article}")
@@ -137,21 +137,17 @@ class RAGBaseline:
 
     def __init__(self, model_name: str):
         import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from transformers import AutoTokenizer, AutoModelForCausalLM
 
         log.info(f"Loading model: {model_name}")
         device = get_device()
 
-        # Load in 8-bit for memory efficiency (~10GB for 8B model)
+        # float16, no quantization — consistent with all other pipeline scripts
         if device == "cuda":
-            bnb_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-            )
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                quantization_config=bnb_config,
                 device_map="auto",
-                torch_dtype=torch.bfloat16,
+                torch_dtype=torch.float16,
             )
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -200,33 +196,33 @@ class RAGBaseline:
         """Generate one headline. Greedy decoding, no sampling."""
         import torch
 
+        # Wrap with chat template — required for LLaMA-3.1-Instruct
+        chat_prompt = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=1024
+            chat_prompt, return_tensors="pt", truncation=True, max_length=1024
         )
         input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
         if self.device == "cuda":
             input_ids = input_ids.to("cuda")
+            attention_mask = attention_mask.to("cuda")
 
         prompt_len = input_ids.shape[1]
 
         with torch.no_grad():
-            if self.device == "cuda":
-                with torch.cuda.amp.autocast():
-                    outputs = self.model.generate(
-                        input_ids,
-                        max_new_tokens=max_new_tokens,
-                        do_sample=False,
-                        temperature=1.0,
-                        pad_token_id=self.tokenizer.eos_token_id,
-                    )
-            else:
-                outputs = self.model.generate(
-                    input_ids,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    temperature=1.0,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                )
+            outputs = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                temperature=1.0,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
 
         # Decode only generated tokens
         generated_ids = outputs[0][prompt_len:]
@@ -274,7 +270,9 @@ class RAGBaseline:
             done_authors = {r["author_id"] for r in existing}
             log.info(f"Resuming: {len(done_authors)} authors already processed")
 
-        remaining = [a for a in eval_authors if a not in done_authors]
+        # done_authors stores underscore IDs (from output JSONL), 
+        # eval_authors stores hyphenated dir names
+        remaining = [a for a in eval_authors if a.replace("-", "_") not in done_authors]
         log.info(f"Authors to evaluate: {len(remaining)} (of {len(eval_authors)} total)")
 
         total_articles = 0
@@ -290,7 +288,9 @@ class RAGBaseline:
                 if not test_articles:
                     continue
 
-                author_meta = metadata.get(author_id, {})
+                # Per-author dirs use hyphens; metadata uses underscores
+                author_id_underscore = author_id.replace("-", "_")
+                author_meta = metadata.get(author_id_underscore, {})
                 author_name = author_meta.get("name", author_id)
                 author_class = author_meta.get("class", "unknown")
                 source = author_meta.get("source", "unknown")
@@ -300,7 +300,7 @@ class RAGBaseline:
                 author_start = time.time()
 
                 for art in test_articles:
-                    article_text = art.get("article_text", "")
+                    article_text = art.get("article_body") or art.get("article_text", "")
                     ground_truth = art.get("headline", "")
 
                     # Baseline 1: No personalization
@@ -324,7 +324,7 @@ class RAGBaseline:
                     )
 
                     record = {
-                        "author_id": author_id,
+                        "author_id": author_id_underscore,
                         "author_name": author_name,
                         "author_class": author_class,
                         "source": source,

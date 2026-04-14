@@ -61,6 +61,7 @@ outputs/
 # Do NOT ignore docs/ — it has the canonical project plan
 # But ignore chat log exports (large JSON)
 docs/dev_chat_logs/
+docs/COLD_START_STYLEVECTOR_V3.md
 
 # ── OS ──────────────────────────────────────────────────
 .DS_Store

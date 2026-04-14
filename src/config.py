@@ -116,6 +116,12 @@ class ModelConfig:
     intervention_alpha: float = 0.7
     max_new_tokens_headline: int = 30
     max_new_tokens_agnostic: int = 40
+    # LaMP-4 cluster pool caps (V4.2 spec)
+    lamp4_max_users: int = 500           # max rich users for SV extraction
+    lamp4_max_profile_articles: int = 100  # max articles per user
+    # Set after Phase 2C and Phase 3 respectively — None means "not yet determined"
+    best_layer: int = None               # set after layer sweep
+    best_alpha: float = None             # set after alpha sweep
 
 
 @dataclass

@@ -106,10 +106,40 @@ def _validate_output_csv(output_csv: Path, dataset_label: str) -> bool:
                for pat in echo_patterns)
     )
 
+    # Detect article body fragments — the dominant failure mode when chat template
+    # is missing. Body fragments contain mid-sentence text, cookie policy boilerplate,
+    # or LLM role tokens instead of actual headlines.
+    body_fragment_patterns = [
+        # Cookie policy / website boilerplate (scraped from TOI/HT)
+        "cookies", "cookie", "these cookies do not store",
+        "visited our site", "cannot be switched off",
+        "sharing tools", "traffic sources",
+        # LLM role token leakage
+        "assistant", "line:assistant", ":assistant",
+        # Common body continuation markers
+        "End of Article", "FOLLOW US ON",
+        "Cutting Knowledge Date",
+    ]
+    n_body_fragments = 0
+    n_too_short = 0  # Headlines < 5 chars are suspicious
+    for r in rows:
+        hl = r.get("agnostic_headline", "").strip()
+        if not hl:
+            continue
+        # Check for exact body fragment patterns
+        hl_lower = hl.lower().strip()
+        if any(pat.lower() in hl_lower for pat in body_fragment_patterns):
+            n_body_fragments += 1
+        # Headlines that are just 1-2 words (like "assistant", "an", "to") are garbage
+        elif len(hl.split()) <= 2 and len(hl) < 10:
+            n_too_short += 1
+
     log.info(f"--- OUTPUT VALIDATION: {dataset_label} ---")
-    log.info(f"  Total rows     : {n_total:,}")
-    log.info(f"  Empty headlines: {n_empty} ({n_empty / n_total * 100:.1f}%)")
-    log.info(f"  Prompt echoes  : {n_echoes} (suspected garbage outputs)")
+    log.info(f"  Total rows      : {n_total:,}")
+    log.info(f"  Empty headlines  : {n_empty} ({n_empty / n_total * 100:.1f}%)")
+    log.info(f"  Prompt echoes    : {n_echoes} (suspected garbage outputs)")
+    log.info(f"  Body fragments   : {n_body_fragments} (article text, not headlines)")
+    log.info(f"  Too short (<3 wds): {n_too_short} (likely garbage)")
 
     # Sample 5 rows for manual inspection
     sample = random.sample(rows, min(5, len(rows)))
@@ -129,10 +159,52 @@ def _validate_output_csv(output_csv: Path, dataset_label: str) -> bool:
             f"— model may not be stopping correctly"
         )
         passed = False
+    # Body fragments: if >5% of outputs are body text, chat template is broken
+    if n_body_fragments > n_total * 0.05:
+        log.error(
+            f"  ✗ {n_body_fragments} body fragments ({n_body_fragments / n_total * 100:.1f}%) "
+            f"— model is regurgitating article text instead of generating headlines. "
+            f"Verify chat template is applied (tokenizer.apply_chat_template)."
+        )
+        passed = False
+    elif n_body_fragments > 0:
+        log.warning(f"  ⚠ {n_body_fragments} body fragments detected (acceptable if <5%).")
+    if n_too_short > n_total * 0.05:
+        log.warning(
+            f"  ⚠ {n_too_short} outputs are too short (<3 words, {n_too_short / n_total * 100:.1f}%) "
+            f"— model may not be generating properly."
+        )
+        passed = False
     if passed:
         log.info("  ✓ Validation passed — output looks clean")
+    else:
+        log.error("  ✗ VALIDATION FAILED — this CSV must be regenerated with --no-resume")
 
     return passed
+
+
+def _truncate_to_sentence(text: str, max_words: int = 400) -> str:
+    """
+    Truncate article to at most max_words, but always end at a sentence boundary.
+
+    Why this matters: if we truncate mid-sentence, the prompt ends like:
+      '...it's ideal\n\nHeadline:'
+    LLaMA sees an incomplete sentence and CONTINUES it instead of generating a headline.
+    By ending at a full stop, the model gets a clean article → clean headline instruction.
+
+    Falls back to the word boundary if no sentence end is found in the last 200 chars.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+
+    truncated = " ".join(words[:max_words])
+    # Search backward from the truncation point for sentence-ending punctuation
+    for i in range(len(truncated) - 1, max(0, len(truncated) - 300), -1):
+        if truncated[i] in ".!?":
+            return truncated[: i + 1]
+    # Fallback: return word-boundary truncation (better than nothing)
+    return truncated
 
 
 class AgnosticHeadlineGenerator:
@@ -186,15 +258,15 @@ class AgnosticHeadlineGenerator:
         import torch
 
         raw_prompts = [
-            AGNOSTIC_PROMPT.format(article=format_article_for_prompt(art, 400))
+            AGNOSTIC_PROMPT.format(article=_truncate_to_sentence(art, max_words=400))
             for art in articles
         ]
-        
+
         # Apply LLaMA-3.1 chat template so the instruct model follows instructions
         prompts = [
             self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": p}], 
-                tokenize=False, 
+                [{"role": "user", "content": p}],
+                tokenize=False,
                 add_generation_prompt=True
             ) for p in raw_prompts
         ]
@@ -207,11 +279,15 @@ class AgnosticHeadlineGenerator:
             max_length=768,
         ).to("cuda")
 
-        # Track prompt lengths to decode only generated tokens
-        prompt_lengths = [
-            int((inputs["attention_mask"][i] == 1).sum().item())
-            for i in range(len(prompts))
-        ]
+        # FIX: With left-padding, all output tensors share the same padded input length.
+        # Generated tokens always start at index inputs["input_ids"].shape[1] for every
+        # item in the batch — regardless of how many PAD tokens each item has.
+        #
+        # The OLD code used attention_mask.sum() per item, which equals the number of
+        # non-PAD tokens (< padded length for shorter articles). This caused the slice
+        # to start inside the article body, producing body continuations instead of
+        # headlines, and "assistant" token leakage for short articles in mixed batches.
+        input_len = inputs["input_ids"].shape[1]  # same for all items in batch
 
         with torch.no_grad():
             outputs = self.model.generate(
@@ -223,8 +299,8 @@ class AgnosticHeadlineGenerator:
             )
 
         headlines = []
-        for i, output in enumerate(outputs):
-            gen_ids = output[prompt_lengths[i]:]
+        for output in outputs:
+            gen_ids = output[input_len:]  # correct: same offset for every item
             text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
             text = self._clean_output(text)
             headlines.append(text)
@@ -241,6 +317,11 @@ class AgnosticHeadlineGenerator:
         # Remove surrounding quotes
         text = re.sub(r'^["\']|["\']$', "", text)
         text = text.strip()
+        # Safety net: catch residual chat-template role tokens that shouldn't appear
+        # after the prompt_length fix, but guard against edge cases anyway
+        role_tokens = ("assistant", "line:assistant", ":assistant", "user", "<|")
+        if text.lower() in role_tokens or text.lower().startswith("<|"):
+            return ""
         # Truncate to max 30 words
         words = text.split()
         if len(words) > 30:
