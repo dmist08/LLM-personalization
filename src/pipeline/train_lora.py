@@ -350,6 +350,9 @@ def main():
         task_type=TaskType.CAUSAL_LM,
     )
     model = get_peft_model(model, lora_config)
+    # Required for gradient_checkpointing + LoRA: frozen base layers don't
+    # propagate grads, so inputs to the first trainable layer need requires_grad=True
+    model.enable_input_require_grads()
     model.print_trainable_parameters()
 
     # ─── Tokenize datasets ────────────────────────────────────────────────
