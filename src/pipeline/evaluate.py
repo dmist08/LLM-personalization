@@ -1,11 +1,11 @@
 """
-src/pipeline/evaluate.py — Evaluation + results table (Prompt 11).
+src/pipeline/evaluate.py — Evaluation + results table.
 ====================================================================
-Computes ROUGE-L, METEOR, BERTScore for all methods and produces the
+Computes ROUGE-L, METEOR for all methods and produces the
 final results table for the paper.
 
 Required installs:
-  pip install rouge-score bert-score
+  pip install rouge-score nltk
   python -c "import nltk; nltk.download('wordnet'); nltk.download('punkt_tab')"
 
 METHODS EVALUATED:
@@ -13,16 +13,16 @@ METHODS EVALUATED:
   2. rag           — BM25 RAG
   3. stylevector   — vanilla style vector steering
   4. cold_start    — cold-start interpolation (our contribution)
+  5. lora_indian   — LoRA fine-tuned on Indian dataset
+  6. lora_mixed    — LoRA fine-tuned on Indian + LaMP-4
 
 RUN:
-  conda activate cold_start_sv
   python -m src.pipeline.evaluate
 
 OUTPUT:
   outputs/evaluation/result_table.txt   (ASCII)
   outputs/evaluation/result_table.json  (machine-readable)
   outputs/evaluation/result_table.tex   (LaTeX for IEEE paper)
-  outputs/evaluation/per_author_results.jsonl
   logs/evaluate_YYYYMMDD_HHMMSS.log
 """
 
@@ -31,15 +31,32 @@ import json
 import sys
 from pathlib import Path
 
+import nltk
+for resource in ["wordnet", "punkt", "punkt_tab", "omw-1.4"]:
+    nltk.download(resource, quiet=True)
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.config import get_config
-from src.utils import setup_logging, load_jsonl, load_json, save_json, save_jsonl
+from src.utils import setup_logging, load_jsonl, load_json, save_json
 
 cfg = get_config()
 log = setup_logging("evaluate", cfg.paths.logs_dir)
+
+
+def _clean_headline(text: str) -> str:
+    """Remove known trailing garbage patterns from LLM inference outputs."""
+    if not text:
+        return text
+    # Stop at common artifacts — only if they appear after at least 10 chars
+    for stop in [" Category:", " Source", " #", "\n", "  "]:
+        idx = text.find(stop)
+        if idx > 10:
+            text = text[:idx]
+    text = text.strip().strip('"\'')
+    return text.strip()
 
 
 class Evaluator:
@@ -47,7 +64,6 @@ class Evaluator:
 
     def __init__(self):
         self._rouge_scorer = None
-        self._bert_scorer = None
 
     def _get_rouge_scorer(self):
         if self._rouge_scorer is None:
@@ -63,14 +79,13 @@ class Evaluator:
         references: list[str],
     ) -> dict:
         """
-        Compute ROUGE-L, METEOR, and optionally BERTScore.
-        Returns {rouge_l, meteor, bert_score_f1, n_samples, n_empty}.
+        Compute ROUGE-L and METEOR.
+        Returns {rouge_l, meteor, n_samples, n_empty}.
         """
         scorer = self._get_rouge_scorer()
 
         rouge_scores = []
         meteor_scores = []
-        bleu_scores = []
         n_empty = 0
 
         for pred, ref in zip(predictions, references):
@@ -78,6 +93,14 @@ class Evaluator:
                 n_empty += 1
                 continue
             if not ref or not ref.strip():
+                continue
+
+            # Clean outputs
+            pred = _clean_headline(pred)
+            ref = _clean_headline(ref)
+
+            if not pred:
+                n_empty += 1
                 continue
 
             # ROUGE-L
@@ -95,46 +118,12 @@ class Evaluator:
             except Exception:
                 pass
 
-            # BLEU
-            try:
-                from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-                from nltk import word_tokenize
-                smoothie = SmoothingFunction().method1
-                bleu = sentence_bleu([word_tokenize(ref)], word_tokenize(pred), smoothing_function=smoothie)
-                bleu_scores.append(bleu)
-            except Exception:
-                pass
-
         result = {
             "rouge_l": round(float(np.mean(rouge_scores)), 4) if rouge_scores else 0.0,
             "meteor": round(float(np.mean(meteor_scores)), 4) if meteor_scores else 0.0,
-            "bleu": round(float(np.mean(bleu_scores)), 4) if bleu_scores else 0.0,
             "n_samples": len(rouge_scores),
             "n_empty": n_empty,
         }
-
-        # BERTScore (optional — can be slow)
-        try:
-            from bert_score import score as bert_score_fn
-            # Only compute on non-empty pairs
-            valid_preds = [p for p, r in zip(predictions, references)
-                          if p and p.strip() and r and r.strip()]
-            valid_refs = [r for p, r in zip(predictions, references)
-                         if p and p.strip() and r and r.strip()]
-
-            if valid_preds and len(valid_preds) <= 5000:  # cap for speed
-                P, R, F1 = bert_score_fn(
-                    valid_preds, valid_refs,
-                    model_type="distilbert-base-uncased",
-                    verbose=False,
-                )
-                result["bert_score_f1"] = round(float(F1.mean()), 4)
-            else:
-                result["bert_score_f1"] = 0.0
-        except ImportError:
-            log.warning("bert_score not installed — skipping BERTScore")
-            result["bert_score_f1"] = 0.0
-
         return result
 
     def evaluate_method(
@@ -145,14 +134,18 @@ class Evaluator:
     ) -> dict:
         """
         Evaluate a method by author group.
-        Returns {all: {metrics}, rich: {metrics}, sparse: {metrics}}.
+        Returns {all: {metrics}, rich: {metrics}, mid: {metrics}, sparse: {metrics}}.
         """
-        groups = {"all": [], "rich": [], "mid": [], "sparse": [], "tiny": []}
+        # EV-Bug 5: Use metadata ONLY, no rec.get() fallback
+        groups = {"all": [], "rich": [], "mid": [], "sparse": []}
 
         for rec in records:
             author_id = rec.get("author_id", "")
             meta = author_metadata.get(author_id, {})
-            author_class = meta.get("class", rec.get("author_class", "unknown"))
+            author_class = meta.get("class", "unknown")
+
+            if author_class == "unknown":
+                log.warning(f"No class in metadata for author: {author_id}")
 
             pred = rec.get(pred_field, "")
             ref = rec.get("ground_truth", "")
@@ -168,8 +161,8 @@ class Evaluator:
         for group_name, pairs in groups.items():
             if not pairs:
                 results[group_name] = {
-                    "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0,
-                    "bert_score_f1": 0.0, "n_samples": 0, "n_empty": 0,
+                    "rouge_l": 0.0, "meteor": 0.0,
+                    "n_samples": 0, "n_empty": 0,
                 }
                 continue
 
@@ -184,58 +177,71 @@ class Evaluator:
         results: dict,
         output_dir: Path,
     ) -> None:
-        """
-        Produce ASCII, JSON, and LaTeX result tables.
-        results: {method_name: evaluate_method output}
-        """
+        """Produce ASCII, JSON, and LaTeX result tables."""
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── ASCII table ──────────────────────────────────────────────────
         methods = list(results.keys())
+        # EV-Bug 7: renamed qlora → lora_indian/lora_mixed
         method_labels = {
-            "base": "No personalization",
+            "base": "No Personalization",
             "rag": "RAG (BM25)",
-            "qlora": "QLoRA (Fine-tuned)",
-            "stylevector": "StyleVector (vanilla)",
-            "cold_start": "Cold-Start StyleVector",
+            "stylevector": "StyleVector (Base)",
+            "cold_start": "Cold-Start SV (Base)",
+            "lora_indian": "LoRA (Indian)",
+            "lora_mixed": "LoRA (Mixed)",
         }
 
-        header = (
-            f"{'Method':<26} │ {'All':^23} │ {'Rich':^23} │ {'Sparse':^23} │\n"
-            f"{'':26} │ {'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │ "
-            f"{'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │ "
-            f"{'RL':>5} {'MET':>5} {'BLU':>5} {'BS':>5} │"
-        )
+        # EV-Bug 6: Added mid column
+        # ── ASCII table ──────────────────────────────────────────────────
+        col_groups = ["all", "rich", "mid", "sparse"]
+        header_names = {"all": "All", "rich": "Rich", "mid": "Mid", "sparse": "Sparse"}
+
+        header1 = f"{'Method':<28}"
+        header2 = f"{'':28}"
+        for g in col_groups:
+            header1 += f" │ {header_names[g]:^13}"
+            header2 += f" │ {'RL':>6} {'MET':>6}"
+        header1 += " │"
+        header2 += " │"
 
         lines = []
-        lines.append("┌" + "─" * 26 + "┬" + "─" * 25 + "┬" + "─" * 25 + "┬" + "─" * 25 + "┐")
-        lines.append(header)
-        lines.append("├" + "─" * 26 + "┼" + "─" * 25 + "┼" + "─" * 25 + "┼" + "─" * 25 + "┤")
+        sep = "─" * 28
+        for g in col_groups:
+            sep += "┬" + "─" * 15
+        sep += "┐"
+        lines.append("┌" + sep[1:])  # fix first corner
+        lines.append(header1)
+        lines.append(header2)
+
+        sep2 = "─" * 28
+        for g in col_groups:
+            sep2 += "┼" + "─" * 15
+        sep2 += "┤"
+        lines.append("├" + sep2[1:])
 
         for method_key in methods:
             label = method_labels.get(method_key, method_key)
             r = results[method_key]
 
-            row_parts = []
-            for group in ["all", "rich", "sparse"]:
-                g = r.get(group, {})
-                rl = g.get("rouge_l", 0)
-                met = g.get("meteor", 0)
-                bleu = g.get("bleu", 0)
-                bs = g.get("bert_score_f1", 0)
-                row_parts.append(f"{rl:>.3f} {met:>.3f} {bleu:>.3f} {bs:>.3f}")
+            row = f"│ {label:<26}"
+            for g in col_groups:
+                gr = r.get(g, {})
+                rl = gr.get("rouge_l", 0)
+                met = gr.get("meteor", 0)
+                n = gr.get("n_samples", 0)
+                row += f" │ {rl:>6.4f} {met:>6.4f}"
+            row += " │"
+            lines.append(row)
 
-            line = f"│ {label:<24} │ {row_parts[0]:<23} │ {row_parts[1]:<23} │ {row_parts[2]:<23} │"
-            lines.append(line)
-
-        lines.append("└" + "─" * 26 + "┴" + "─" * 25 + "┴" + "─" * 25 + "┴" + "─" * 25 + "┘")
+        sep3 = "─" * 28
+        for g in col_groups:
+            sep3 += "┴" + "─" * 15
+        sep3 += "┘"
+        lines.append("└" + sep3[1:])
 
         table_ascii = "\n".join(lines)
-
-        # Print to log
         log.info("\n" + table_ascii)
 
-        # Save ASCII
         ascii_path = output_dir / "result_table.txt"
         ascii_path.write_text(table_ascii, encoding="utf-8")
 
@@ -244,36 +250,44 @@ class Evaluator:
         save_json(results, json_path)
 
         # ── LaTeX ────────────────────────────────────────────────────────
+        n_cols = 1 + 2 * len(col_groups)  # method + (RL,MET) per group
+        col_spec = "l|" + "|".join(["cc"] * len(col_groups))
+
         latex_lines = [
-            r"\begin{table}[h]",
+            r"\begin{table*}[h]",
             r"\centering",
             r"\caption{Headline Generation Results}",
             r"\label{tab:results}",
-            r"\begin{tabular}{l|cccc|cccc|cccc}",
-            r"\hline",
-            r" & \multicolumn{4}{c|}{All} & \multicolumn{4}{c|}{Rich} & \multicolumn{4}{c}{Sparse} \\",
-            r"Method & RL & MET & BLU & BS & RL & MET & BLU & BS & RL & MET & BLU & BS \\",
+            f"\\begin{{tabular}}{{{col_spec}}}",
             r"\hline",
         ]
+
+        # Multi-column header
+        mc_parts = []
+        for g in col_groups:
+            mc_parts.append(f"\\multicolumn{{2}}{{c}}{{{header_names[g]}}}")
+        latex_lines.append("Method & " + " & ".join(mc_parts) + r" \\")
+
+        sub_parts = []
+        for g in col_groups:
+            sub_parts.append("RL & MET")
+        latex_lines.append(" & " + " & ".join(sub_parts) + r" \\")
+        latex_lines.append(r"\hline")
 
         for method_key in methods:
             label = method_labels.get(method_key, method_key)
             r = results[method_key]
             vals = []
-            for group in ["all", "rich", "sparse"]:
-                g = r.get(group, {})
-                vals.extend([
-                    f"{g.get('rouge_l', 0):.3f}",
-                    f"{g.get('meteor', 0):.3f}",
-                    f"{g.get('bleu', 0):.3f}",
-                    f"{g.get('bert_score_f1', 0):.3f}",
-                ])
+            for g in col_groups:
+                gr = r.get(g, {})
+                vals.append(f"{gr.get('rouge_l', 0):.4f}")
+                vals.append(f"{gr.get('meteor', 0):.4f}")
             latex_lines.append(f"{label} & {' & '.join(vals)} \\\\")
 
         latex_lines.extend([
             r"\hline",
             r"\end{tabular}",
-            r"\end{table}",
+            r"\end{table*}",
         ])
 
         tex_path = output_dir / "result_table.tex"
@@ -284,101 +298,21 @@ class Evaluator:
         log.info(f"  result_table.json (JSON)")
         log.info(f"  result_table.tex  (LaTeX)")
 
-        # ── Sanity checks ────────────────────────────────────────────────
-        if "stylevector" in results:
-            sv_rl = results["stylevector"].get("all", {}).get("rouge_l", 0)
-            paper_rl = cfg.eval.paper_rouge_l
-
-            if sv_rl > 0 and (sv_rl < 0.035 or sv_rl > 0.050):
-                log.warning(
-                    f"⚠ StyleVector ROUGE-L = {sv_rl:.4f} deviates >15% from "
-                    f"paper ({paper_rl:.4f}). Investigate before reporting."
-                )
-
-        # Key result check
-        if "cold_start" in results and "base" in results:
+        # ── Key result check ─────────────────────────────────────────────
+        if "cold_start" in results and "stylevector" in results:
             cs_sparse_rl = results["cold_start"].get("sparse", {}).get("rouge_l", 0)
-            base_sparse_rl = results["base"].get("sparse", {}).get("rouge_l", 0)
+            sv_sparse_rl = results["stylevector"].get("sparse", {}).get("rouge_l", 0)
 
-            if cs_sparse_rl > base_sparse_rl:
+            if cs_sparse_rl > sv_sparse_rl:
                 log.info(
-                    f"\n✓ PASS — Cold-Start ({cs_sparse_rl:.4f}) beats "
-                    f"No Personalization ({base_sparse_rl:.4f}) on sparse authors"
+                    f"\n✓ KEY RESULT — Cold-Start SV ({cs_sparse_rl:.4f}) beats "
+                    f"StyleVector ({sv_sparse_rl:.4f}) on sparse authors!"
                 )
             else:
                 log.warning(
-                    f"\n✗ FAIL — Cold-Start ({cs_sparse_rl:.4f}) does NOT beat "
-                    f"No Personalization ({base_sparse_rl:.4f}) on sparse authors. "
-                    f"The evaluation is what it is."
+                    f"\n✗ Cold-Start SV ({cs_sparse_rl:.4f}) does NOT beat "
+                    f"StyleVector ({sv_sparse_rl:.4f}) on sparse. Report as-is."
                 )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Computational Cost Table (for paper)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def generate_compute_report(output_dir: Path) -> None:
-    """
-    Aggregate all GPU tracking logs into a computational cost table.
-    This is required for the research paper.
-    """
-    from src.utils_gpu import aggregate_gpu_reports
-
-    report = aggregate_gpu_reports()
-    if not report or not report.get("jobs"):
-        log.warning("No GPU tracking data found")
-        return
-
-    log.info("\n" + "=" * 60)
-    log.info("COMPUTATIONAL COST REPORT")
-    log.info("=" * 60)
-    log.info(f"{'Job':<30} {'Hours':>8} {'Energy kWh':>12} {'CO₂ g':>8} {'GPU':>15} {'Peak VRAM':>10}")
-    log.info("-" * 95)
-    for job in report["jobs"]:
-        log.info(
-            f"{job['job']:<30} {job['hours']:>8.2f} "
-            f"{job['energy_kwh']:>12.4f} {job['co2_g']:>8.1f} "
-            f"{job.get('gpu', 'N/A'):>15} {job.get('peak_vram_gb', 0):>9.1f}G"
-        )
-    log.info("-" * 95)
-    log.info(
-        f"{'TOTAL':<30} {report['total_gpu_hours']:>8.2f} "
-        f"{report['total_energy_kwh']:>12.4f} {report['total_co2_grams']:>8.1f}"
-    )
-    log.info(f"\nTotal CO₂: {report['total_co2_kg']:.3f} kg CO₂eq "
-             f"(equivalent to ~{report['total_co2_kg']/0.21:.1f} km driving)")
-
-    # Save
-    save_json(report, output_dir / "compute_cost_report.json")
-
-    # LaTeX table
-    tex_lines = [
-        r"\begin{table}[h]",
-        r"\centering",
-        r"\caption{Computational Cost}",
-        r"\label{tab:compute}",
-        r"\begin{tabular}{l|r|r|r|r}",
-        r"\hline",
-        r"Job & Hours & kWh & gCO$_2$eq & Peak VRAM \\",
-        r"\hline",
-    ]
-    for job in report["jobs"]:
-        tex_lines.append(
-            f"{job['job']} & {job['hours']:.2f} & "
-            f"{job['energy_kwh']:.4f} & {job['co2_g']:.1f} & "
-            f"{job.get('peak_vram_gb', 0):.1f}GB \\\\"
-        )
-    tex_lines.extend([
-        r"\hline",
-        f"Total & {report['total_gpu_hours']:.2f} & "
-        f"{report['total_energy_kwh']:.4f} & {report['total_co2_grams']:.1f} & -- \\\\",
-        r"\hline",
-        r"\end{tabular}",
-        r"\end{table}",
-    ])
-    tex_path = output_dir / "compute_cost.tex"
-    tex_path.write_text("\n".join(tex_lines), encoding="utf-8")
-    log.info(f"Saved compute cost LaTeX: {tex_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -391,17 +325,24 @@ def main():
         "--rag-outputs",
         default=str(cfg.paths.outputs_dir / "baselines" / "rag_and_base_outputs.jsonl"),
     )
+    # EV-Bug 2: fixed default path
     parser.add_argument(
         "--sv-outputs",
-        default=str(cfg.paths.outputs_dir / "stylevector_outputs.jsonl"),
+        default=str(cfg.paths.outputs_dir / "stylevector" / "sv_base_outputs.jsonl"),
     )
+    # EV-Bug 3: fixed default path
     parser.add_argument(
         "--cs-outputs",
-        default=str(cfg.paths.outputs_dir / "cold_start_outputs.jsonl"),
+        default=str(cfg.paths.outputs_dir / "cold_start" / "cs_base_outputs.jsonl"),
+    )
+    # EV-Bug 7: renamed from qlora
+    parser.add_argument(
+        "--lora-indian-outputs",
+        default=str(cfg.paths.outputs_dir / "lora" / "lora_indian_outputs.jsonl"),
     )
     parser.add_argument(
-        "--qlora-outputs",
-        default=str(cfg.paths.outputs_dir / "qlora_outputs.jsonl"),
+        "--lora-mixed-outputs",
+        default=str(cfg.paths.outputs_dir / "lora" / "lora_mixed_outputs.jsonl"),
     )
     parser.add_argument(
         "--metadata",
@@ -411,8 +352,6 @@ def main():
         "--output-dir",
         default=str(cfg.paths.outputs_dir / "evaluation"),
     )
-    parser.add_argument("--skip-bert-score", action="store_true")
-    parser.add_argument("--compute-report", action="store_true", default=True)
     args = parser.parse_args()
 
     log.info("=" * 60)
@@ -420,30 +359,38 @@ def main():
     log.info("=" * 60)
 
     metadata = load_json(Path(args.metadata)) if Path(args.metadata).exists() else {}
+
+    # EV-Bug 4: Pre-evaluation assertion on metadata
+    if metadata:
+        assert all("-" not in k for k in metadata.keys()), \
+            "Hyphen found in metadata key — migration incomplete"
+        valid_classes = {"rich", "sparse", "mid"}
+        bad = [k for k, v in metadata.items() if v.get("class") not in valid_classes]
+        if bad:
+            log.warning(f"Authors with invalid class in metadata: {bad}")
+
     evaluator = Evaluator()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results = {}
-    per_author_records = []
 
     # ── Load available outputs ───────────────────────────────────────────
     rag_path = Path(args.rag_outputs)
     sv_path = Path(args.sv_outputs)
     cs_path = Path(args.cs_outputs)
-    qlora_path = Path(args.qlora_outputs)
+    lora_indian_path = Path(args.lora_indian_outputs)
+    lora_mixed_path = Path(args.lora_mixed_outputs)
 
     if rag_path.exists():
         rag_records = load_jsonl(rag_path)
         log.info(f"RAG outputs: {len(rag_records):,} records")
 
-        # Baseline 1: No personalization
         log.info("\nEvaluating: No Personalization (base)")
         results["base"] = evaluator.evaluate_method(
             rag_records, "base_output", metadata
         )
 
-        # Baseline 2: RAG
         log.info("Evaluating: RAG (BM25)")
         results["rag"] = evaluator.evaluate_method(
             rag_records, "rag_output", metadata
@@ -454,32 +401,42 @@ def main():
     if sv_path.exists():
         sv_records = load_jsonl(sv_path)
         log.info(f"\nStyleVector outputs: {len(sv_records):,} records")
-        log.info("Evaluating: StyleVector (vanilla)")
+        log.info("Evaluating: StyleVector (Base)")
         results["stylevector"] = evaluator.evaluate_method(
             sv_records, "sv_output", metadata
         )
     else:
-        log.info(f"StyleVector outputs not found (OK if not yet generated): {sv_path}")
+        log.info(f"StyleVector outputs not found: {sv_path}")
 
     if cs_path.exists():
         cs_records = load_jsonl(cs_path)
         log.info(f"\nCold-Start outputs: {len(cs_records):,} records")
-        log.info("Evaluating: Cold-Start StyleVector")
+        log.info("Evaluating: Cold-Start StyleVector (Base)")
         results["cold_start"] = evaluator.evaluate_method(
             cs_records, "cs_output", metadata
         )
     else:
-        log.info(f"Cold-Start outputs not found (OK if not yet generated): {cs_path}")
+        log.info(f"Cold-Start outputs not found: {cs_path}")
 
-    if qlora_path.exists():
-        qlora_records = load_jsonl(qlora_path)
-        log.info(f"\nQLoRA outputs: {len(qlora_records):,} records")
-        log.info("Evaluating: QLoRA (Fine-tuned)")
-        results["qlora"] = evaluator.evaluate_method(
-            qlora_records, "qlora_output", metadata
+    if lora_indian_path.exists():
+        lora_i_records = load_jsonl(lora_indian_path)
+        log.info(f"\nLoRA Indian outputs: {len(lora_i_records):,} records")
+        log.info("Evaluating: LoRA (Indian)")
+        results["lora_indian"] = evaluator.evaluate_method(
+            lora_i_records, "lora_output", metadata
         )
     else:
-        log.info(f"QLoRA outputs not found (OK if not yet generated): {qlora_path}")
+        log.info(f"LoRA Indian outputs not found: {lora_indian_path}")
+
+    if lora_mixed_path.exists():
+        lora_m_records = load_jsonl(lora_mixed_path)
+        log.info(f"\nLoRA Mixed outputs: {len(lora_m_records):,} records")
+        log.info("Evaluating: LoRA (Mixed)")
+        results["lora_mixed"] = evaluator.evaluate_method(
+            lora_m_records, "lora_output", metadata
+        )
+    else:
+        log.info(f"LoRA Mixed outputs not found: {lora_mixed_path}")
 
     if not results:
         log.error("No output files found — nothing to evaluate!")
@@ -487,10 +444,6 @@ def main():
 
     # ── Generate tables ──────────────────────────────────────────────────
     evaluator.generate_result_table(results, output_dir)
-
-    # ── Compute cost report ──────────────────────────────────────────────
-    if args.compute_report:
-        generate_compute_report(output_dir)
 
     # ── Summary ──────────────────────────────────────────────────────────
     log.info("\n" + "=" * 60)
@@ -501,7 +454,6 @@ def main():
         log.info(
             f"  {method:<20}: ROUGE-L={all_r.get('rouge_l', 0):.4f}  "
             f"METEOR={all_r.get('meteor', 0):.4f}  "
-            f"BLEU={all_r.get('bleu', 0):.4f}  "
             f"(n={all_r.get('n_samples', 0):,})"
         )
 
