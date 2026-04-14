@@ -6,16 +6,11 @@ This produces personalized headlines using vanilla StyleVector (no cold-start).
 
 RUN (Indian):
   python -m src.pipeline.stylevector_inference \
-    --model-path checkpoints/qlora/merged \
-    --dataset indian
-
-RUN (LaMP-4):
-  python -m src.pipeline.stylevector_inference \
-    --model-path checkpoints/qlora/merged \
-    --dataset lamp4
+    --model-path models/Llama-3.1-8B-Instruct \
+    --dataset indian --layer 15 --alpha 0.5
 
 OUTPUT:
-  outputs/stylevector_outputs.jsonl
+  outputs/stylevector/sv_base_outputs.jsonl
   logs/gpu_tracking/stylevector_inference_*.json
 """
 
@@ -197,7 +192,7 @@ def main():
     parser = argparse.ArgumentParser(description="StyleVector Inference")
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4"])
-    parser.add_argument("--layer", type=int, default=21)
+    parser.add_argument("--layer", type=int, default=15)
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--test-dir", default=None)     # Override dataset default
     parser.add_argument("--vectors-dir", default=None)   # Override dataset default

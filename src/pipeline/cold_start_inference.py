@@ -7,7 +7,9 @@ for activation-steered headline generation. This is the NOVEL CONTRIBUTION.
 RUN (Indian):
   python -m src.pipeline.cold_start_inference \
     --model-path models/Llama-3.1-8B-Instruct \
-    --dataset indian
+    --dataset indian \
+    --layer 15 \
+    --alpha 0.5
 
 OUTPUT:
   outputs/cold_start/cs_base_outputs.jsonl
@@ -185,7 +187,7 @@ def main():
     parser = argparse.ArgumentParser(description="Cold-Start Inference")
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--dataset", default="indian", choices=["indian", "lamp4"])
-    parser.add_argument("--layer", type=int, default=21)
+    parser.add_argument("--layer", type=int, default=15)
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--test-dir", default=None)
     parser.add_argument("--cold-start-dir", default=None)
