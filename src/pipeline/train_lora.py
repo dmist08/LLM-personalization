@@ -277,10 +277,12 @@ def main():
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--smoke-test", action="store_true")
-    parser.add_argument("--num-epochs", type=int, default=3)
+    parser.add_argument("--num-epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=cfg.training.batch_size)
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--lr", type=float, default=cfg.training.learning_rate)
+    parser.add_argument("--max-seq-length", type=int, default=768,
+                        help="Max sequence length (768 matches extraction pipeline)")
     args = parser.parse_args()
 
     # Derive output dir from dataset if not specified
@@ -357,8 +359,8 @@ def main():
 
     # ─── Tokenize datasets ────────────────────────────────────────────────
     log.info("Tokenizing datasets...")
-    train_dataset = format_for_training(train_records, tokenizer, max_seq_length=cfg.training.max_seq_length)
-    val_dataset = format_for_training(val_records, tokenizer, max_seq_length=cfg.training.max_seq_length)
+    train_dataset = format_for_training(train_records, tokenizer, max_seq_length=args.max_seq_length)
+    val_dataset = format_for_training(val_records, tokenizer, max_seq_length=args.max_seq_length)
     log.info(f"Train: {len(train_dataset)} tokenized | Val: {len(val_dataset)} tokenized")
 
     # ─── Log first training sample ────────────────────────────────────────
