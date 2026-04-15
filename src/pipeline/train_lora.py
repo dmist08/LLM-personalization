@@ -373,15 +373,15 @@ def main():
     log.info(f"  Source: {sample['source']}")
 
     # ─── Training arguments ───────────────────────────────────────────────
-    # L4 has 24GB VRAM. 8B bf16 model = ~16GB. LoRA adds minimal overhead.
-    # OOM happens during eval (no gradient checkpointing) — keep eval batch tiny.
+    # L40S has 48GB VRAM. 8B bf16 = ~16GB, 8-bit optim = ~2GB → ~30GB for activations.
+    # Push batch sizes to maximize GPU utilization.
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
-        per_device_train_batch_size=4,          # L40S 48GB has plenty of headroom
-        per_device_eval_batch_size=2,           # eval has no grad_ckpt, keep conservative
-        gradient_accumulation_steps=4,          # 4×4=16 effective batch
+        per_device_train_batch_size=8,          # 48GB can handle 8 easily
+        per_device_eval_batch_size=4,           # eval uses less mem (no grads)
+        gradient_accumulation_steps=4,          # 8×4=32 effective batch
         eval_accumulation_steps=8,              # don't accumulate all eval preds in GPU
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
