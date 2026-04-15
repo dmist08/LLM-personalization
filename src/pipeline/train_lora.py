@@ -344,7 +344,7 @@ def main():
         local_files_only=is_local,
         device_map="auto",
         torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",  # O(N) memory, ~2x faster attention
+        attn_implementation="sdpa",              # PyTorch native, no extra install needed
     )
 
     # ─── Apply LoRA ───────────────────────────────────────────────────────
