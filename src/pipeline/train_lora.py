@@ -328,6 +328,10 @@ def main():
     log.info(f"Val: {len(val_records)} Indian samples (always Indian-only)")
 
     # ─── Load model + tokenizer ───────────────────────────────────────────
+    # L40S optimizations: Flash Attention 2 + TF32
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     log.info(f"\nLoading model from {args.model_path}")
     is_local = Path(args.model_path).exists()
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=is_local)
@@ -339,7 +343,8 @@ def main():
         args.model_path,
         local_files_only=is_local,
         device_map="auto",
-        torch_dtype=torch.bfloat16,  # bf16 for training (NOT fp16)
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",  # O(N) memory, ~2x faster attention
     )
 
     # ─── Apply LoRA ───────────────────────────────────────────────────────
@@ -373,24 +378,26 @@ def main():
     log.info(f"  Source: {sample['source']}")
 
     # ─── Training arguments ───────────────────────────────────────────────
-    # L40S has 48GB VRAM. 8B bf16 = ~16GB, 8-bit optim = ~2GB → ~30GB for activations.
-    # Push batch sizes to maximize GPU utilization.
+    # L40S (48GB, Ada Lovelace, CC 8.9): Flash Attn 2 + TF32 + bf16.
+    # Model ~16GB + 8-bit optim ~2GB + activations ~20GB = ~38GB peak.
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
-        per_device_train_batch_size=8,          # 48GB can handle 8 easily
-        per_device_eval_batch_size=4,           # eval uses less mem (no grads)
+        per_device_train_batch_size=8,          # 48GB + FlashAttn2 handles 8 comfortably
+        per_device_eval_batch_size=4,           # eval has no grad_ckpt but also no grads
         gradient_accumulation_steps=4,          # 8×4=32 effective batch
-        eval_accumulation_steps=8,              # don't accumulate all eval preds in GPU
+        eval_accumulation_steps=8,              # don't accumulate all eval preds in VRAM
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_steps=cfg.training.warmup_steps,
-        optim="adamw_8bit",                     # saves ~4GB optimizer state
+        optim="adamw_8bit",                     # saves ~6GB optimizer state
         bf16=True,
         fp16=False,
+        bf16_full_eval=True,                    # keep bf16 during eval (faster + less mem)
+        tf32=True,                              # TF32 matmul on Ada Lovelace
         gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},  # suppress deprecation warning
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         save_strategy="epoch" if args.max_steps < 0 else "steps",
         save_steps=args.max_steps if args.max_steps > 0 else 500,
         eval_strategy="epoch" if args.max_steps < 0 else "steps",
@@ -401,7 +408,8 @@ def main():
         save_total_limit=3,
         max_grad_norm=1.0,
         logging_steps=10 if args.smoke_test else 50,
-        dataloader_num_workers=0,
+        dataloader_num_workers=4,               # overlap data loading with compute
+        dataloader_pin_memory=True,             # faster CPU→GPU transfer
         seed=cfg.training.seed,
         report_to="none",
         remove_unused_columns=False,
