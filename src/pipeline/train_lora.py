@@ -373,18 +373,24 @@ def main():
     log.info(f"  Source: {sample['source']}")
 
     # ─── Training arguments ───────────────────────────────────────────────
+    # L4 has 24GB VRAM. 8B bf16 model = ~16GB. LoRA adds minimal overhead.
+    # OOM happens during eval (no gradient checkpointing) — keep eval batch tiny.
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
+        per_device_train_batch_size=2,          # was 4 — halved to fit L4
+        per_device_eval_batch_size=1,           # eval has no grad_ckpt → needs less VRAM
+        gradient_accumulation_steps=8,          # 2×8=16 effective batch (same as before)
+        eval_accumulation_steps=8,              # don't accumulate all eval preds in GPU
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_steps=cfg.training.warmup_steps,
+        optim="adamw_8bit",                     # saves ~4GB optimizer state
         bf16=True,
         fp16=False,
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # suppress deprecation warning
         save_strategy="epoch" if args.max_steps < 0 else "steps",
         save_steps=args.max_steps if args.max_steps > 0 else 500,
         eval_strategy="epoch" if args.max_steps < 0 else "steps",
@@ -397,7 +403,7 @@ def main():
         logging_steps=10 if args.smoke_test else 50,
         dataloader_num_workers=0,
         seed=cfg.training.seed,
-        report_to="none",  # Use wandb if available
+        report_to="none",
         remove_unused_columns=False,
     )
 
