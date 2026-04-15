@@ -128,12 +128,14 @@ def load_mixed_data(
     lamp4_train_path: Path,
     metadata_path: Path,
     lamp4_target_count: int = 6500,
+    articles_per_user: int = 5,
     seed: int = 42,
 ) -> list[dict]:
     """
     Load mixed dataset: ALL Indian + ~lamp4_target_count sampled LaMP-4 articles.
     Indian articles are NOT sampled — all 6,480 included.
-    LaMP-4: sample 1 article per user to maximize author diversity.
+    LaMP-4: up to articles_per_user articles per user (model needs multiple examples
+    per author to learn style from author-conditioned prompts).
     """
     # All Indian
     indian_data = load_indian_data(indian_train_path, metadata_path)
@@ -148,7 +150,7 @@ def load_mixed_data(
         profile = rec.get("profile", [])
 
         if not profile:
-            # Flat record (not nested)
+            # Flat record (no profile array) — use top-level fields
             article = rec.get("article_text", "")
             headline = rec.get("headline", "")
             if article.strip() and headline.strip():
@@ -159,29 +161,32 @@ def load_mixed_data(
                     "source": "lamp4",
                 })
         else:
-            # Nested: pick 1 random article per user
+            # Nested: pick up to articles_per_user articles
+            # LaMP-4 profile articles use 'article_text' and 'headline'
             valid_articles = [
                 a for a in profile
-                if (a.get("text") or a.get("article_text", "")).strip()
-                and a.get("title", "").strip()
+                if a.get("article_text", "").strip()
+                and a.get("headline", "").strip()
             ]
             if valid_articles:
-                art = rng.choice(valid_articles)
-                article = art.get("text") or art.get("article_text", "")
-                headline = art.get("title", "")
-                lamp4_formatted.append({
-                    "author_name": f"LaMP4_user_{user_id}",
-                    "article": _truncate_to_sentence(article, max_words=400),
-                    "headline": headline,
-                    "source": "lamp4",
-                })
+                selected = rng.sample(
+                    valid_articles,
+                    min(articles_per_user, len(valid_articles)),
+                )
+                for art in selected:
+                    lamp4_formatted.append({
+                        "author_name": f"LaMP4_user_{user_id}",
+                        "article": _truncate_to_sentence(art["article_text"], max_words=400),
+                        "headline": art["headline"],
+                        "source": "lamp4",
+                    })
 
     # Cap LaMP-4 to target count
     if len(lamp4_formatted) > lamp4_target_count:
         rng.shuffle(lamp4_formatted)
         lamp4_formatted = lamp4_formatted[:lamp4_target_count]
 
-    log.info(f"LaMP-4 sampled: {len(lamp4_formatted)} articles (1 per user, capped at {lamp4_target_count})")
+    log.info(f"LaMP-4 sampled: {len(lamp4_formatted)} articles ({articles_per_user}/user, capped at {lamp4_target_count})")
 
     # Combine
     combined = indian_data + lamp4_formatted
