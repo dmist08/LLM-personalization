@@ -379,9 +379,9 @@ def main():
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
-        per_device_train_batch_size=2,          # was 4 — halved to fit L4
-        per_device_eval_batch_size=1,           # eval has no grad_ckpt → needs less VRAM
-        gradient_accumulation_steps=8,          # 2×8=16 effective batch (same as before)
+        per_device_train_batch_size=4,          # L40S 48GB has plenty of headroom
+        per_device_eval_batch_size=2,           # eval has no grad_ckpt, keep conservative
+        gradient_accumulation_steps=4,          # 4×4=16 effective batch
         eval_accumulation_steps=8,              # don't accumulate all eval preds in GPU
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
