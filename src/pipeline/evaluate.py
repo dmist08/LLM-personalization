@@ -76,9 +76,10 @@ def _clean_headline(text: str) -> str:
 class Evaluator:
     """Compute ROUGE-L, METEOR, BLEU, and BERTScore for headline generation."""
 
-    def __init__(self, bert_model: str = "roberta-large"):
+    def __init__(self, bert_model: str = "roberta-large", bert_batch_size: int = 16):
         self._rouge_scorer = None
         self._bert_model = bert_model
+        self._bert_batch_size = bert_batch_size
         self._bertscore_loaded = False
 
     def _get_rouge_scorer(self):
@@ -176,7 +177,7 @@ class Evaluator:
                 model_type=self._bert_model,
                 lang="en",
                 verbose=not self._bertscore_loaded,
-                batch_size=64,
+                batch_size=self._bert_batch_size,
             )
             bertscore_scores = F1.tolist()
             self._bertscore_loaded = True
