@@ -1,12 +1,19 @@
 """
 src/pipeline/evaluate.py — Evaluation + results table.
 ====================================================================
-Computes ROUGE-L, METEOR for all methods and produces the
-final results table for the paper.
+Computes ROUGE-L, METEOR, BLEU, and BERTScore for all methods and
+produces the final results table for the paper.
 
 Required installs:
-  pip install rouge-score nltk
-  python -c "import nltk; nltk.download('wordnet'); nltk.download('punkt_tab')"
+  pip install rouge-score nltk bert-score
+
+  NLTK resources (auto-downloaded at startup):
+    wordnet, punkt, punkt_tab, omw-1.4
+
+  BERTScore model (auto-downloaded on first run, ~400MB):
+    microsoft/deberta-xlarge-mnli   (default for English)
+    — OR use --bert-model roberta-large for faster/lighter scoring.
+    The model caches to ~/.cache/huggingface/hub/
 
 METHODS EVALUATED:
   1. base          — no personalization
@@ -16,8 +23,15 @@ METHODS EVALUATED:
   5. lora_indian   — LoRA fine-tuned on Indian dataset
   6. lora_mixed    — LoRA fine-tuned on Indian + LaMP-4
 
+METRICS:
+  1. ROUGE-L (RL) — Longest common subsequence F1 (surface overlap)
+  2. METEOR (MET) — Unigram alignment with stemming + synonyms
+  3. BLEU-4 (BL)  — Modified 4-gram precision with brevity penalty
+  4. BERTScore (BS)— Contextual embedding similarity (semantic match)
+
 RUN:
   python -m src.pipeline.evaluate
+  python -m src.pipeline.evaluate --bert-model roberta-large  # faster
 
 OUTPUT:
   outputs/evaluation/result_table.txt   (ASCII)
@@ -60,10 +74,12 @@ def _clean_headline(text: str) -> str:
 
 
 class Evaluator:
-    """Compute metrics for headline generation evaluation."""
+    """Compute ROUGE-L, METEOR, BLEU, and BERTScore for headline generation."""
 
-    def __init__(self):
+    def __init__(self, bert_model: str = "roberta-large"):
         self._rouge_scorer = None
+        self._bert_model = bert_model
+        self._bertscore_loaded = False
 
     def _get_rouge_scorer(self):
         if self._rouge_scorer is None:
@@ -79,13 +95,14 @@ class Evaluator:
         references: list[str],
     ) -> dict:
         """
-        Compute ROUGE-L and METEOR.
-        Returns {rouge_l, meteor, n_samples, n_empty}.
+        Compute all 4 metrics.
+        Returns {rouge_l, meteor, bleu, bertscore, n_samples, n_empty}.
         """
         scorer = self._get_rouge_scorer()
 
-        rouge_scores = []
-        meteor_scores = []
+        # Filter valid pairs
+        valid_preds = []
+        valid_refs = []
         n_empty = 0
 
         for pred, ref in zip(predictions, references):
@@ -95,7 +112,6 @@ class Evaluator:
             if not ref or not ref.strip():
                 continue
 
-            # Clean outputs
             pred = _clean_headline(pred)
             ref = _clean_headline(ref)
 
@@ -103,25 +119,81 @@ class Evaluator:
                 n_empty += 1
                 continue
 
-            # ROUGE-L
+            valid_preds.append(pred)
+            valid_refs.append(ref)
+
+        if not valid_preds:
+            return {
+                "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0, "bertscore": 0.0,
+                "n_samples": 0, "n_empty": n_empty,
+            }
+
+        # ── ROUGE-L ──────────────────────────────────────────────────────
+        rouge_scores = []
+        for pred, ref in zip(valid_preds, valid_refs):
             rouge = scorer.score(ref, pred)
             rouge_scores.append(rouge["rougeL"].fmeasure)
 
-            # METEOR
-            try:
-                from nltk.translate.meteor_score import single_meteor_score
-                from nltk import word_tokenize
+        # ── METEOR ───────────────────────────────────────────────────────
+        meteor_scores = []
+        try:
+            from nltk.translate.meteor_score import single_meteor_score
+            from nltk import word_tokenize
+            for pred, ref in zip(valid_preds, valid_refs):
                 meteor = single_meteor_score(
                     word_tokenize(ref), word_tokenize(pred)
                 )
                 meteor_scores.append(meteor)
-            except Exception:
-                pass
+        except Exception as e:
+            log.warning(f"METEOR computation failed: {e}")
+
+        # ── BLEU-4 ───────────────────────────────────────────────────────
+        bleu_scores = []
+        try:
+            from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+            from nltk import word_tokenize
+            smoother = SmoothingFunction().method1
+            for pred, ref in zip(valid_preds, valid_refs):
+                ref_tokens = word_tokenize(ref.lower())
+                pred_tokens = word_tokenize(pred.lower())
+                # sentence-level BLEU-4 with smoothing
+                score = sentence_bleu(
+                    [ref_tokens], pred_tokens,
+                    weights=(0.25, 0.25, 0.25, 0.25),
+                    smoothing_function=smoother,
+                )
+                bleu_scores.append(score)
+        except Exception as e:
+            log.warning(f"BLEU computation failed: {e}")
+
+        # ── BERTScore ────────────────────────────────────────────────────
+        bertscore_scores = []
+        try:
+            from bert_score import score as bert_score_fn
+            # BERTScore computes in batch — much faster than per-sample
+            P, R, F1 = bert_score_fn(
+                valid_preds, valid_refs,
+                model_type=self._bert_model,
+                lang="en",
+                verbose=not self._bertscore_loaded,
+                batch_size=64,
+            )
+            bertscore_scores = F1.tolist()
+            self._bertscore_loaded = True
+        except ImportError:
+            log.warning(
+                "bert-score not installed. Install with: pip install bert-score\n"
+                "BERTScore will be 0.0 in results."
+            )
+        except Exception as e:
+            log.warning(f"BERTScore computation failed: {e}")
 
         result = {
             "rouge_l": round(float(np.mean(rouge_scores)), 4) if rouge_scores else 0.0,
             "meteor": round(float(np.mean(meteor_scores)), 4) if meteor_scores else 0.0,
-            "n_samples": len(rouge_scores),
+            "bleu": round(float(np.mean(bleu_scores)), 4) if bleu_scores else 0.0,
+            "bertscore": round(float(np.mean(bertscore_scores)), 4) if bertscore_scores else 0.0,
+            "n_samples": len(valid_preds),
             "n_empty": n_empty,
         }
         return result
@@ -136,7 +208,6 @@ class Evaluator:
         Evaluate a method by author group.
         Returns {all: {metrics}, rich: {metrics}, mid: {metrics}, sparse: {metrics}}.
         """
-        # EV-Bug 5: Use metadata ONLY, no rec.get() fallback
         groups = {"all": [], "rich": [], "mid": [], "sparse": []}
 
         for rec in records:
@@ -161,13 +232,14 @@ class Evaluator:
         for group_name, pairs in groups.items():
             if not pairs:
                 results[group_name] = {
-                    "rouge_l": 0.0, "meteor": 0.0,
+                    "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0, "bertscore": 0.0,
                     "n_samples": 0, "n_empty": 0,
                 }
                 continue
 
             preds = [p for p, r in pairs]
             refs = [r for p, r in pairs]
+            log.info(f"  Computing metrics for {group_name} ({len(preds)} samples)...")
             results[group_name] = self.compute_metrics(preds, refs)
 
         return results
@@ -181,7 +253,6 @@ class Evaluator:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         methods = list(results.keys())
-        # EV-Bug 7: renamed qlora → lora_indian/lora_mixed
         method_labels = {
             "base": "No Personalization",
             "rag": "RAG (BM25)",
@@ -191,31 +262,39 @@ class Evaluator:
             "lora_mixed": "LoRA (Mixed)",
         }
 
-        # EV-Bug 6: Added mid column
-        # ── ASCII table ──────────────────────────────────────────────────
+        metric_keys = ["rouge_l", "bleu", "meteor", "bertscore"]
+        metric_short = {"rouge_l": "RL", "bleu": "BL", "meteor": "MET", "bertscore": "BS"}
+
         col_groups = ["all", "rich", "mid", "sparse"]
         header_names = {"all": "All", "rich": "Rich", "mid": "Mid", "sparse": "Sparse"}
 
+        # ── ASCII table ──────────────────────────────────────────────────
+        # Each group has 4 metrics: RL, BL, MET, BS
+        col_width = 4 * 7 + 3  # 4 values × 7 chars + 3 spaces = 31
         header1 = f"{'Method':<28}"
         header2 = f"{'':28}"
         for g in col_groups:
-            header1 += f" │ {header_names[g]:^13}"
-            header2 += f" │ {'RL':>6} {'MET':>6}"
+            header1 += f" │ {header_names[g]:^{col_width}}"
+            header2 += " │"
+            for mk in metric_keys:
+                header2 += f" {metric_short[mk]:>6}"
         header1 += " │"
         header2 += " │"
 
         lines = []
+        # Top border
         sep = "─" * 28
         for g in col_groups:
-            sep += "┬" + "─" * 15
+            sep += "┬" + "─" * (col_width + 2)
         sep += "┐"
-        lines.append("┌" + sep[1:])  # fix first corner
+        lines.append("┌" + sep[1:])
         lines.append(header1)
         lines.append(header2)
 
+        # Header separator
         sep2 = "─" * 28
         for g in col_groups:
-            sep2 += "┼" + "─" * 15
+            sep2 += "┼" + "─" * (col_width + 2)
         sep2 += "┤"
         lines.append("├" + sep2[1:])
 
@@ -226,16 +305,17 @@ class Evaluator:
             row = f"│ {label:<26}"
             for g in col_groups:
                 gr = r.get(g, {})
-                rl = gr.get("rouge_l", 0)
-                met = gr.get("meteor", 0)
-                n = gr.get("n_samples", 0)
-                row += f" │ {rl:>6.4f} {met:>6.4f}"
+                row += " │"
+                for mk in metric_keys:
+                    val = gr.get(mk, 0)
+                    row += f" {val:>6.4f}"
             row += " │"
             lines.append(row)
 
+        # Bottom border
         sep3 = "─" * 28
         for g in col_groups:
-            sep3 += "┴" + "─" * 15
+            sep3 += "┴" + "─" * (col_width + 2)
         sep3 += "┘"
         lines.append("└" + sep3[1:])
 
@@ -250,29 +330,41 @@ class Evaluator:
         save_json(results, json_path)
 
         # ── LaTeX ────────────────────────────────────────────────────────
-        n_cols = 1 + 2 * len(col_groups)  # method + (RL,MET) per group
-        col_spec = "l|" + "|".join(["cc"] * len(col_groups))
+        n_metrics = len(metric_keys)
+        col_spec = "l|" + "|".join(["c" * n_metrics] * len(col_groups))
 
         latex_lines = [
             r"\begin{table*}[h]",
             r"\centering",
-            r"\caption{Headline Generation Results}",
+            r"\caption{Headline Generation Results — ROUGE-L, BLEU-4, METEOR, BERTScore}",
             r"\label{tab:results}",
             f"\\begin{{tabular}}{{{col_spec}}}",
             r"\hline",
         ]
 
-        # Multi-column header
+        # Multi-column header row 1: group names
         mc_parts = []
         for g in col_groups:
-            mc_parts.append(f"\\multicolumn{{2}}{{c}}{{{header_names[g]}}}")
+            mc_parts.append(f"\\multicolumn{{{n_metrics}}}{{c}}{{{header_names[g]}}}")
         latex_lines.append("Method & " + " & ".join(mc_parts) + r" \\")
 
+        # Multi-column header row 2: metric names
         sub_parts = []
         for g in col_groups:
-            sub_parts.append("RL & MET")
+            sub_parts.append(" & ".join(metric_short[mk] for mk in metric_keys))
         latex_lines.append(" & " + " & ".join(sub_parts) + r" \\")
         latex_lines.append(r"\hline")
+
+        # Find best values for bolding
+        best_vals = {}
+        for g in col_groups:
+            for mk in metric_keys:
+                best_val = -1
+                for method_key in methods:
+                    val = results[method_key].get(g, {}).get(mk, 0)
+                    if val > best_val:
+                        best_val = val
+                best_vals[(g, mk)] = best_val
 
         for method_key in methods:
             label = method_labels.get(method_key, method_key)
@@ -280,8 +372,13 @@ class Evaluator:
             vals = []
             for g in col_groups:
                 gr = r.get(g, {})
-                vals.append(f"{gr.get('rouge_l', 0):.4f}")
-                vals.append(f"{gr.get('meteor', 0):.4f}")
+                for mk in metric_keys:
+                    v = gr.get(mk, 0)
+                    formatted = f"{v:.4f}"
+                    # Bold the best value in each column
+                    if v > 0 and abs(v - best_vals[(g, mk)]) < 1e-5:
+                        formatted = f"\\textbf{{{formatted}}}"
+                    vals.append(formatted)
             latex_lines.append(f"{label} & {' & '.join(vals)} \\\\")
 
         latex_lines.extend([
@@ -296,7 +393,7 @@ class Evaluator:
         log.info(f"\nSaved tables to {output_dir}/:")
         log.info(f"  result_table.txt  (ASCII)")
         log.info(f"  result_table.json (JSON)")
-        log.info(f"  result_table.tex  (LaTeX)")
+        log.info(f"  result_table.tex  (LaTeX — best values auto-bolded)")
 
         # ── Key result check ─────────────────────────────────────────────
         if "cold_start" in results and "stylevector" in results:
@@ -325,17 +422,14 @@ def main():
         "--rag-outputs",
         default=str(cfg.paths.outputs_dir / "baselines" / "rag_and_base_outputs.jsonl"),
     )
-    # EV-Bug 2: fixed default path
     parser.add_argument(
         "--sv-outputs",
         default=str(cfg.paths.outputs_dir / "stylevector" / "sv_base_outputs.jsonl"),
     )
-    # EV-Bug 3: fixed default path
     parser.add_argument(
         "--cs-outputs",
         default=str(cfg.paths.outputs_dir / "cold_start" / "cs_base_outputs.jsonl"),
     )
-    # EV-Bug 7: renamed from qlora
     parser.add_argument(
         "--lora-indian-outputs",
         default=str(cfg.paths.outputs_dir / "lora" / "lora_indian_outputs.jsonl"),
@@ -352,15 +446,21 @@ def main():
         "--output-dir",
         default=str(cfg.paths.outputs_dir / "evaluation"),
     )
+    parser.add_argument(
+        "--bert-model",
+        default="roberta-large",
+        help="BERTScore model. Options: roberta-large (fast), "
+             "microsoft/deberta-xlarge-mnli (best quality)",
+    )
     args = parser.parse_args()
 
     log.info("=" * 60)
-    log.info("EVALUATION")
+    log.info("EVALUATION — ROUGE-L, BLEU-4, METEOR, BERTScore")
     log.info("=" * 60)
 
     metadata = load_json(Path(args.metadata)) if Path(args.metadata).exists() else {}
 
-    # EV-Bug 4: Pre-evaluation assertion on metadata
+    # Pre-evaluation assertion on metadata
     if metadata:
         assert all("-" not in k for k in metadata.keys()), \
             "Hyphen found in metadata key — migration incomplete"
@@ -369,7 +469,7 @@ def main():
         if bad:
             log.warning(f"Authors with invalid class in metadata: {bad}")
 
-    evaluator = Evaluator()
+    evaluator = Evaluator(bert_model=args.bert_model)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -452,8 +552,10 @@ def main():
     for method, r in results.items():
         all_r = r.get("all", {})
         log.info(
-            f"  {method:<20}: ROUGE-L={all_r.get('rouge_l', 0):.4f}  "
-            f"METEOR={all_r.get('meteor', 0):.4f}  "
+            f"  {method:<20}: RL={all_r.get('rouge_l', 0):.4f}  "
+            f"BL={all_r.get('bleu', 0):.4f}  "
+            f"MET={all_r.get('meteor', 0):.4f}  "
+            f"BS={all_r.get('bertscore', 0):.4f}  "
             f"(n={all_r.get('n_samples', 0):,})"
         )
 
