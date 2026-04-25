@@ -1,0 +1,66 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        'on-secondary': '#ffffff',
+        'outline': '#737686',
+        'on-surface': '#191c20',
+        'surface-variant': '#e1e2e8',
+        'surface-bright': '#f8f9ff',
+        'surface-container-highest': '#e1e2e8',
+        'surface-container-low': '#f2f3f9',
+        'primary-container': '#2563eb',
+        'on-surface-variant': '#434655',
+        'secondary': '#1652ce',
+        'error': '#ba1a1a',
+        'primary-fixed': '#dbe1ff',
+        'surface-dim': '#d8dae0',
+        'surface': '#f8f9ff',
+        'error-container': '#ffdad6',
+        'inverse-primary': '#b4c5ff',
+        'on-tertiary': '#ffffff',
+        'on-primary': '#ffffff',
+        'secondary-container': '#3c6de8',
+        'on-error': '#ffffff',
+        'primary': '#004ac6',
+        'outline-variant': '#c3c6d7',
+        'surface-container-lowest': '#ffffff',
+        'background': '#f8f9ff',
+        'on-primary-container': '#eeefff',
+        'surface-tint': '#0053db',
+        'surface-container-high': '#e7e8ee',
+        'inverse-on-surface': '#eff0f6',
+        'surface-container': '#eceef3',
+      },
+      borderRadius: {
+        DEFAULT: '0.25rem',
+        lg: '0.5rem',
+        xl: '0.75rem',
+        full: '9999px',
+      },
+      fontFamily: {
+        headline: ['Inter'],
+        body: ['Inter'],
+        label: ['Inter'],
+      },
+      keyframes: {
+        shimmer: {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        'spin-slow': {
+          from: { transform: 'rotate(0deg)' },
+          to: { transform: 'rotate(360deg)' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.5s infinite linear',
+        'spin-slow': 'spin-slow 1.4s linear infinite',
+      },
+    },
+  },
+  plugins: [],
+};
