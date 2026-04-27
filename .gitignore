@@ -62,6 +62,7 @@ outputs/
 # But ignore chat log exports (large JSON)
 docs/dev_chat_logs/
 docs/COLD_START_STYLEVECTOR_V3.md
+docs/ColdStart_StyleVector_Report_IEEE.docx
 
 # ── OS ──────────────────────────────────────────────────
 .DS_Store
