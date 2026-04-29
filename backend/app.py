@@ -1,9 +1,12 @@
 import os
+from pathlib import Path
 from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env relative to THIS file so it works regardless of CWD
+_HERE = Path(__file__).parent
+load_dotenv(dotenv_path=_HERE / ".env")
 
 from routes.authors  import authors_bp
 from routes.generate import generate_bp
