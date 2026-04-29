@@ -137,7 +137,7 @@ export default function ChatPage() {
                 </p>
                 {/* Feature pills */}
                 <div className="flex items-center justify-center gap-2 mt-6 flex-wrap">
-                  {['✦ Activation Steering', '✦ Cold-Start Clustering', '✦ 43 Indian Journalists'].map(t => (
+                  {['✦ Activation Steering', '✦ Cold-Start Clustering', '✦ 42 Indian Journalists'].map(t => (
                     <span
                       key={t}
                       className="px-3 py-1 rounded-full border border-outline-variant/30 text-[12px] text-outline-variant dark:text-slate-400 bg-surface-container/50 dark:bg-[#1C1C1C]/50"

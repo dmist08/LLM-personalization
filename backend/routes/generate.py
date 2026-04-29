@@ -99,16 +99,6 @@ def call_llm(method: str, source_text: str, author_id: str, publication: str) ->
     }
 
 
-# ── Fix 6: Health route ────────────────────────────────────────
-@generate_bp.route("/health", methods=["GET"])
-def health():
-    return jsonify({
-        "status":    "ok",
-        "llm_url":   LLM_URL,
-        "timestamp": time.time(),
-    })
-
-
 @generate_bp.route("/generate", methods=["POST"])
 def generate():
     body        = request.get_json(force=True)
@@ -136,7 +126,7 @@ def generate():
     def _call(method):
         return method, call_llm(method, source_text, author_id, publication)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_call, m): m for m in METHODS}
         for future in as_completed(futures):
             method = futures[future]

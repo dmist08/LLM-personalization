@@ -3,12 +3,7 @@ import { getAuthors } from '../services/api';
 
 const PUBLICATIONS = [
   { code: 'TOI', label: 'The Times of India' },
-  { code: 'HINDU', label: 'The Hindu' },
-  { code: 'IE', label: 'Indian Express' },
   { code: 'HT', label: 'Hindustan Times' },
-  { code: 'MINT', label: 'Mint' },
-  { code: 'NDTV', label: 'NDTV' },
-  { code: 'WIRE', label: 'The Wire' },
 ];
 
 const MAX_WORDS = 500;
