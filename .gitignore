@@ -72,3 +72,5 @@ wandb/
 # ── Antigravity agent ───────────────────────────────────
 .gemini/
 .agents/workflows/
+
+backend/load_test_results.json
