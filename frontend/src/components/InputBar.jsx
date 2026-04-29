@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getAuthors } from '../services/api';
+import { useTheme } from '../context/ThemeContext';
 
 const PUBLICATIONS = [
   { code: 'TOI', label: 'The Times of India' },
@@ -14,6 +15,7 @@ const MAX_HEIGHT = 260;   // px — cap before scroll kicks in
 const countWords = (text) => text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
 
 export default function InputBar({ onGenerate, isGenerating }) {
+  const { isDark } = useTheme();
   const [publication, setPublication] = useState('');
   const [authors, setAuthors] = useState([]);
   const [authorId, setAuthorId] = useState('');
@@ -185,7 +187,7 @@ export default function InputBar({ onGenerate, isGenerating }) {
             id="source-select"
             value={publication}
             onChange={e => setPublication(e.target.value)}
-            style={selectStyle}
+            style={getSelectStyle(isDark)}
           >
             <option value="">Source…</option>
             {PUBLICATIONS.map(p => (
@@ -199,7 +201,7 @@ export default function InputBar({ onGenerate, isGenerating }) {
             value={authorId}
             onChange={e => setAuthorId(e.target.value)}
             disabled={!publication || loadingAuthors}
-            style={{ ...selectStyle, opacity: (!publication || loadingAuthors) ? 0.5 : 1 }}
+            style={{ ...getSelectStyle(isDark), opacity: (!publication || loadingAuthors) ? 0.5 : 1 }}
           >
             <option value="">
               {loadingAuthors ? 'Loading…' : 'Author…'}
@@ -232,23 +234,24 @@ export default function InputBar({ onGenerate, isGenerating }) {
   );
 }
 
-/* Shared select style object */
-const selectStyle = {
+/* Shared select style — accepts isDark to set colorScheme for native dropdown */
+const getSelectStyle = (isDark) => ({
   height: 30,
   padding: '0 10px',
   borderRadius: 8,
-  border: '1px solid rgba(127,127,127,0.2)',
-  background: 'rgba(127,127,127,0.07)',
+  border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
+  background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.04)',
   fontSize: 12,
   fontWeight: 500,
   cursor: 'pointer',
-  color: 'inherit',
+  color: isDark ? '#F8F9FF' : '#111',
   outline: 'none',
   transition: 'border-color 0.15s',
   appearance: 'none',
   WebkitAppearance: 'none',
   paddingRight: 28,
-  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+  colorScheme: isDark ? 'dark' : 'light',
+  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${isDark ? '%23aaa' : '%23888'}' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
   backgroundRepeat: 'no-repeat',
   backgroundPosition: 'right 8px center',
-};
+});
