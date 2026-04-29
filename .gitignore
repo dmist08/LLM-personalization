@@ -59,6 +59,9 @@ desktop.ini
 *.key
 client_secret*.json
 
+# ── Internal docs ───────────────────────────────────────
+docs/
+
 # ── Jupyter ─────────────────────────────────────────────
 .ipynb_checkpoints/
 
