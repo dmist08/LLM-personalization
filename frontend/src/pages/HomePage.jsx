@@ -39,7 +39,7 @@ export default function HomePage() {
 
         <Sidebar onNewChat={() => {}} />
 
-        <main className="flex-1 md:ml-[260px] h-full flex flex-col relative">
+        <main className="flex-1 md:ml-[260px] h-full flex flex-col overflow-hidden">
 
           {/* Top header */}
           <header className="h-16 items-center justify-between px-8 bg-surface/80 dark:bg-[#0F0F0F]/80 backdrop-blur-md sticky top-0 z-30 hidden md:flex">
@@ -76,7 +76,7 @@ export default function HomePage() {
           </header>
 
           {/* Empty state */}
-          <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-3xl mx-auto w-full pb-52">
+          <div className="flex-1 overflow-y-auto flex flex-col items-center justify-center p-8 max-w-3xl mx-auto w-full">
             <div className="w-16 h-16 rounded-2xl bg-surface-container-low dark:bg-[#1C1C1C] flex items-center justify-center mb-6 text-primary dark:text-[#3B82F6] shadow-[0_12px_32px_rgba(21,28,37,0.06)] border border-outline-variant/10">
               <span className="material-symbols-outlined" style={{ fontSize: 32, fontVariationSettings: "'FILL' 1" }}>
                 layers
@@ -108,8 +108,10 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Input bar — sticky bottom */}
-          <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
+          {/* Input bar — sticky footer, width matches the card */}
+          <div className="flex-shrink-0 w-full max-w-3xl mx-auto px-4 md:px-8">
+            <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
+          </div>
         </main>
       </div>
     </div>

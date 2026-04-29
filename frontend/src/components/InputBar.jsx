@@ -1,32 +1,47 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { getAuthors } from '../services/api';
 
 const PUBLICATIONS = [
-  { code: 'TOI',  label: 'The Times of India' },
+  { code: 'TOI', label: 'The Times of India' },
   { code: 'HINDU', label: 'The Hindu' },
-  { code: 'IE',   label: 'Indian Express' },
-  { code: 'HT',   label: 'Hindustan Times' },
+  { code: 'IE', label: 'Indian Express' },
+  { code: 'HT', label: 'Hindustan Times' },
   { code: 'MINT', label: 'Mint' },
   { code: 'NDTV', label: 'NDTV' },
   { code: 'WIRE', label: 'The Wire' },
 ];
 
-const MAX_CHARS = 5000;
+const MAX_WORDS = 500;
+const MIN_ROWS_HEIGHT = 44;   // px — one line height (compact default)
+const MAX_HEIGHT = 260;   // px — cap before scroll kicks in
+
+/** Count words (non-empty token splits) */
+const countWords = (text) => text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
 
 export default function InputBar({ onGenerate, isGenerating }) {
   const [publication, setPublication] = useState('');
-  const [authors, setAuthors]     = useState([]);
-  const [authorId, setAuthorId]   = useState('');
+  const [authors, setAuthors] = useState([]);
+  const [authorId, setAuthorId] = useState('');
   const [sourceText, setSourceText] = useState('');
   const [loadingAuthors, setLoadingAuthors] = useState(false);
 
-  // Load authors when publication changes
+  const textareaRef = useRef(null);
+
+  /* ── Auto-resize textarea ───────────────────────────── */
+  const autoResize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const scrollH = el.scrollHeight;
+    el.style.height = Math.min(Math.max(scrollH, MIN_ROWS_HEIGHT), MAX_HEIGHT) + 'px';
+    el.style.overflowY = scrollH > MAX_HEIGHT ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => { autoResize(); }, [sourceText, autoResize]);
+
+  /* ── Load authors on publication change ─────────────── */
   useEffect(() => {
-    if (!publication) {
-      setAuthors([]);
-      setAuthorId('');
-      return;
-    }
+    if (!publication) { setAuthors([]); setAuthorId(''); return; }
     setLoadingAuthors(true);
     setAuthorId('');
     getAuthors(publication)
@@ -35,7 +50,17 @@ export default function InputBar({ onGenerate, isGenerating }) {
       .finally(() => setLoadingAuthors(false));
   }, [publication]);
 
-  const canGenerate = publication && authorId && sourceText.trim().length > 20 && !isGenerating;
+  /* ── Keyboard shortcut: Ctrl/Cmd + Enter ────────────── */
+  const handleKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const wordCount = countWords(sourceText);
+  const overLimit = wordCount > MAX_WORDS;
+  const canGenerate = publication && authorId && wordCount > 3 && !overLimit && !isGenerating;
 
   const handleSubmit = () => {
     if (!canGenerate) return;
@@ -50,88 +75,185 @@ export default function InputBar({ onGenerate, isGenerating }) {
     });
   };
 
-  return (
-    <div className="absolute bottom-0 left-0 w-full p-6 md:p-8 bg-gradient-to-t from-surface dark:from-[#0F0F0F] via-surface/90 dark:via-[#0F0F0F]/90 to-transparent">
-      <div className="max-w-3xl mx-auto bg-surface-container-lowest dark:bg-[#1C1C1C] rounded-xl shadow-[0_12px_32px_rgba(21,28,37,0.06)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.4)] border border-outline-variant/10 overflow-hidden flex flex-col">
+  /* ── Styles (inline so no Tailwind conflicts) ────────── */
+  const wrapperStyle = {
+    width: '100%',
+    background: 'transparent',
+    padding: '8px 0 12px',
+  };
 
-        {/* Row 1: Controls */}
-        <div className="flex items-center gap-3 p-4 border-b border-outline-variant/10 bg-surface-container-low/50 dark:bg-[#171717]/50 flex-wrap">
-          {/* Publication selector */}
+  const cardStyle = {
+    width: '100%',
+    borderRadius: 16,
+    border: '1px solid rgba(127,127,127,0.15)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.10)',
+    background: 'transparent',
+    overflow: 'hidden',
+  };
+
+  return (
+    <div style={wrapperStyle}>
+      <div style={cardStyle}>
+
+        {/* ── Top row: Textarea + Generate button ──────────── */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '12px 12px 8px' }}>
+          <textarea
+            ref={textareaRef}
+            value={sourceText}
+            onChange={e => setSourceText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Paste source article text here… (Ctrl+Enter to generate)"
+            rows={1}
+            style={{
+              flex: 1,
+              minHeight: MIN_ROWS_HEIGHT,
+              maxHeight: MAX_HEIGHT,
+              resize: 'none',
+              overflowY: 'hidden',
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              fontSize: 14,
+              lineHeight: '22px',
+              padding: '10px 12px',
+              color: 'inherit',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+              transition: 'height 0.1s ease',
+            }}
+          />
+
+          {/* Generate button — beside the textarea, bottom-aligned */}
+          <button
+            id="generate-btn"
+            onClick={handleSubmit}
+            disabled={!canGenerate}
+            title={canGenerate ? 'Generate (Ctrl+Enter)' : 'Fill in all fields first'}
+            style={{
+              flexShrink: 0,
+              height: 40,
+              padding: '0 18px',
+              borderRadius: 10,
+              border: 'none',
+              cursor: canGenerate ? 'pointer' : 'not-allowed',
+              fontWeight: 600,
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginBottom: 2,
+              transition: 'opacity 0.2s, transform 0.1s',
+              background: canGenerate
+                ? 'linear-gradient(135deg, #004AC6 0%, #2563EB 100%)'
+                : 'rgba(127,127,127,0.15)',
+              color: canGenerate ? '#fff' : 'rgba(127,127,127,0.7)',
+              boxShadow: canGenerate ? '0 4px 14px rgba(37,99,235,0.35)' : 'none',
+            }}
+            onMouseEnter={e => { if (canGenerate) e.currentTarget.style.transform = 'translateY(-1px)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
+            onMouseDown={e => { if (canGenerate) e.currentTarget.style.transform = 'translateY(1px)'; }}
+          >
+            {isGenerating ? (
+              <>
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 17, animation: 'spin 1s linear infinite' }}
+                >
+                  progress_activity
+                </span>
+                Generating…
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined" style={{ fontSize: 17 }}>
+                  auto_awesome
+                </span>
+                Generate
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* ── Divider ──────────────────────────────────────── */}
+        <div style={{ height: 1, background: 'rgba(127,127,127,0.10)', margin: '0 12px' }} />
+
+        {/* ── Bottom row: Source · Author · Word count ─────── */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px 10px',
+          flexWrap: 'wrap',
+        }}>
+          {/* Source dropdown */}
           <select
+            id="source-select"
             value={publication}
             onChange={e => setPublication(e.target.value)}
-            className="w-[155px] h-9 text-[13px] font-medium bg-surface dark:bg-[#1C1C1C] text-on-surface dark:text-[#F8F9FF] border-none rounded-md shadow-sm focus:ring-1 focus:ring-primary appearance-none cursor-pointer px-3"
+            style={selectStyle}
           >
-            <option value="">Select Source...</option>
+            <option value="">Source…</option>
             {PUBLICATIONS.map(p => (
               <option key={p.code} value={p.code}>{p.label}</option>
             ))}
           </select>
 
-          {/* Author selector */}
+          {/* Author dropdown */}
           <select
+            id="author-select"
             value={authorId}
             onChange={e => setAuthorId(e.target.value)}
             disabled={!publication || loadingAuthors}
-            className="w-[175px] h-9 text-[13px] font-medium bg-surface dark:bg-[#1C1C1C] text-on-surface dark:text-[#F8F9FF] border-none rounded-md shadow-sm focus:ring-1 focus:ring-primary appearance-none cursor-pointer px-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ ...selectStyle, opacity: (!publication || loadingAuthors) ? 0.5 : 1 }}
           >
             <option value="">
-              {loadingAuthors ? 'Loading...' : 'Select Author...'}
+              {loadingAuthors ? 'Loading…' : 'Author…'}
             </option>
             {authors.map(a => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
 
-          {/* Selected journalist chip */}
-          {authorId && (
-            <span className="px-3 py-1 bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#004AC6] dark:text-[#3B82F6] text-[12px] font-medium rounded-full">
-              ✦ Style vector loaded
-            </span>
-          )}
-        </div>
+          {/* Spacer */}
+          <span style={{ flex: 1 }} />
 
-        {/* Row 2: Textarea */}
-        <textarea
-          value={sourceText}
-          onChange={e => setSourceText(e.target.value.slice(0, MAX_CHARS))}
-          placeholder="Paste source article text here to begin style vector extraction..."
-          className="w-full h-24 p-4 text-[14px] bg-transparent border-none focus:ring-0 resize-none text-on-surface dark:text-[#F8F9FF] placeholder:text-outline dark:placeholder:text-[#555]"
-        />
-
-        {/* Row 3: Actions */}
-        <div className="flex items-center justify-between p-4 bg-surface-container-low/30 dark:bg-[#171717]/30">
-          <span className={`text-[12px] font-medium tracking-wide ${
-            sourceText.length > MAX_CHARS * 0.9 ? 'text-error' : 'text-outline'
-          }`}>
-            {sourceText.length} / {MAX_CHARS}
+          {/* Word count */}
+          <span style={{
+            fontSize: 12,
+            fontWeight: 500,
+            letterSpacing: '0.02em',
+            color: overLimit ? '#ef4444' : wordCount > MAX_WORDS * 0.85 ? '#f59e0b' : 'rgba(127,127,127,0.7)',
+            transition: 'color 0.2s',
+            whiteSpace: 'nowrap',
+          }}>
+            {wordCount} / {MAX_WORDS} words
           </span>
-
-          <button
-            onClick={handleSubmit}
-            disabled={!canGenerate}
-            className={`px-5 py-2 rounded-md font-medium text-[13px] flex items-center gap-2 transition-colors ${
-              canGenerate
-                ? 'bg-gradient-to-br from-[#004AC6] to-[#2563EB] text-white hover:brightness-110 active:scale-95'
-                : 'bg-surface-variant dark:bg-[#2a2a2a] text-outline cursor-not-allowed'
-            }`}
-          >
-            {isGenerating ? (
-              <>
-                <span className="material-symbols-outlined animate-spin-slow" style={{ fontSize: 18 }}>
-                  progress_activity
-                </span>
-                Generating...
-              </>
-            ) : (
-              <>
-                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>auto_awesome</span>
-                Generate Headlines
-              </>
-            )}
-          </button>
         </div>
       </div>
+
+      {/* Spin keyframe injected once */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
+
+/* Shared select style object */
+const selectStyle = {
+  height: 30,
+  padding: '0 10px',
+  borderRadius: 8,
+  border: '1px solid rgba(127,127,127,0.2)',
+  background: 'rgba(127,127,127,0.07)',
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: 'pointer',
+  color: 'inherit',
+  outline: 'none',
+  transition: 'border-color 0.15s',
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  paddingRight: 28,
+  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+  backgroundRepeat: 'no-repeat',
+  backgroundPosition: 'right 8px center',
+};

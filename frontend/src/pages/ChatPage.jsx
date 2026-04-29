@@ -16,12 +16,15 @@ export default function ChatPage() {
   const { isDark, toggleTheme } = useTheme();
   const { user } = useAuth();
 
-  // Each entry in messages = { id, payload, results, isLoading }
   const [messages, setMessages] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState(null);
-  const [copiedId, setCopiedId] = useState(null); // "msgId-type"
+  const [copiedId, setCopiedId] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const bottomRef = useRef(null);
+
+  const sidebarW = sidebarCollapsed ? 64 : 260;
+  const hasMessages = messages.length > 0;
 
   // Load session from route state (fresh generation) or from API (history visit)
   useEffect(() => {
@@ -33,7 +36,6 @@ export default function ChatPage() {
         results: results.results,
         isLoading: false,
       }]);
-      // Clear state so refresh doesn't re-use it
       window.history.replaceState({}, '');
     } else if (sessionId) {
       getChatSession(sessionId)
@@ -52,7 +54,6 @@ export default function ChatPage() {
     setIsGenerating(true);
     setError(null);
     const tempId = 'pending_' + Date.now();
-    // Add a loading message immediately
     setMessages(prev => [...prev, {
       id: tempId,
       payload,
@@ -62,11 +63,17 @@ export default function ChatPage() {
 
     try {
       const data = await generateHeadlines({ ...payload, sessionId });
-      setMessages(prev => prev.map(m =>
-        m.id === tempId
-          ? { id: data.session_id, payload, results: data.results, isLoading: false }
-          : m
-      ));
+      console.log('[ChatPage] generateHeadlines raw response:', data);
+      console.log('[ChatPage] data.results:', data?.results);
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === tempId
+            ? { id: data.session_id, payload, results: data.results, isLoading: false }
+            : m
+        );
+        console.log('[ChatPage] updated messages:', updated);
+        return updated;
+      });
     } catch (err) {
       setError(err.response?.data?.error || 'Generation failed. Please try again.');
       setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -85,9 +92,16 @@ export default function ChatPage() {
     <div className={`${isDark ? 'dark' : ''}`}>
       <div className="bg-surface dark:bg-[#0F0F0F] text-on-surface dark:text-[#F8F9FF] h-screen flex overflow-hidden transition-colors duration-300">
 
-        <Sidebar onNewChat={() => navigate('/')} />
+        <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} />
 
-        <main className="flex-1 md:ml-[260px] h-screen flex flex-col relative bg-surface dark:bg-[#0F0F0F]">
+        {/* Main content — shifts with sidebar */}
+        <main
+          style={{
+            marginLeft: sidebarW,
+            transition: 'margin-left 0.25s cubic-bezier(0.4,0,0.2,1)',
+          }}
+          className="flex-1 h-screen flex flex-col bg-surface dark:bg-[#0F0F0F] overflow-hidden"
+        >
 
           {/* Top header */}
           <header className="h-16 items-center justify-between px-8 bg-surface/80 dark:bg-[#0F0F0F]/80 backdrop-blur-md sticky top-0 z-30 hidden md:flex border-b border-outline-variant/10">
@@ -103,86 +117,126 @@ export default function ChatPage() {
             </div>
           </header>
 
-          {/* Messages area */}
-          <div className="flex-1 overflow-y-auto px-4 md:px-8 py-8 pb-52 no-scrollbar max-w-[900px] mx-auto w-full">
-
-            {messages.map((msg) => (
-              <div key={msg.id} className="mb-12">
-                {/* User prompt bubble */}
-                <div className="flex flex-col items-end mb-8">
-                  <div className="flex items-center gap-2 mb-2 mr-1">
-                    <span className="text-[10px] font-medium text-on-surface-variant bg-surface-container-high dark:bg-[#2a2a2a] px-2 py-0.5 rounded-full">
-                      {msg.payload.authorName} · {msg.payload.publication}
+          {/* ── No-message state: center the InputBar ── */}
+          {!hasMessages ? (
+            <div className="flex-1 flex flex-col items-center justify-center px-4">
+              {/* Hero text */}
+              <div className="mb-10 text-center select-none">
+                <span
+                  className="material-symbols-outlined text-primary dark:text-[#3B82F6] mb-4 block"
+                  style={{ fontSize: 48 }}
+                >
+                  layers
+                </span>
+                <h2 className="text-[26px] font-semibold tracking-[-0.03em] text-on-surface dark:text-[#F8F9FF] mb-2">
+                  Cold-Start StyleVector
+                </h2>
+                <p className="text-[14px] text-outline max-w-sm leading-relaxed">
+                  Select a journalist and source publication to initialize the style
+                  steering model. Or begin with a raw text block.
+                </p>
+                {/* Feature pills */}
+                <div className="flex items-center justify-center gap-2 mt-6 flex-wrap">
+                  {['✦ Activation Steering', '✦ Cold-Start Clustering', '✦ 43 Indian Journalists'].map(t => (
+                    <span
+                      key={t}
+                      className="px-3 py-1 rounded-full border border-outline-variant/30 text-[12px] text-outline-variant dark:text-slate-400 bg-surface-container/50 dark:bg-[#1C1C1C]/50"
+                    >
+                      {t}
                     </span>
-                  </div>
-                  <div className="bg-primary-container dark:bg-[#1E3A5F] text-white px-5 py-3.5 rounded-2xl rounded-tr-sm max-w-[85%] md:max-w-[70%] shadow-[0_4px_12px_rgba(37,99,235,0.15)] text-[14px] leading-relaxed">
-                    {msg.payload.sourceText.length > 250
-                      ? msg.payload.sourceText.substring(0, 250) + '...'
-                      : msg.payload.sourceText}
-                  </div>
+                  ))}
                 </div>
-
-                {/* Loading / Results */}
-                {msg.isLoading ? (
-                  <div>
-                    {/* Generating banner */}
-                    <div className="flex items-center gap-3 mb-6 ml-2">
-                      <span className="material-symbols-outlined text-primary dark:text-[#3B82F6] animate-spin-slow" style={{ fontSize: 18 }}>
-                        progress_activity
-                      </span>
-                      <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-primary dark:text-[#3B82F6]">
-                        Generating Headlines
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {RESULT_TYPES.map(type => (
-                        <HeadlineCard key={type} type={type} isLoading={true} />
-                      ))}
-                    </div>
-                  </div>
-                ) : msg.results ? (
-                  <div>
-                    {/* Complete banner */}
-                    <div className="flex items-center gap-2 mb-6 ml-2">
-                      <span className="w-2 h-2 rounded-full bg-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
-                      <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#10B981]">
-                        Generation Complete
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {RESULT_TYPES.map(type => {
-                        const result = msg.results[type];
-                        const copyKey = `${msg.id}-${type}`;
-                        return (
-                          <HeadlineCard
-                            key={type}
-                            type={type}
-                            headline={result?.headline || 'Unavailable'}
-                            rougeL={type === 'cold_start_sv' ? result?.rouge_l : undefined}
-                            latencyMs={result?.latency_ms}
-                            isLoading={false}
-                            isCopied={copiedId === copyKey}
-                            onCopy={(text) => handleCopy(text, copyKey)}
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
               </div>
-            ))}
 
-            {error && (
-              <div className="px-4 py-3 bg-error-container text-error rounded-lg text-[13px] mb-6">
-                {error}
+              {/* Floating InputBar centered */}
+              <div className="w-full" style={{ maxWidth: 870 }}>
+                <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
               </div>
-            )}
+            </div>
+          ) : (
+            /* ── Has messages: scroll area + pinned InputBar ── */
+            <>
+              <div className="flex-1 overflow-y-auto px-4 md:px-8 py-8 pb-8 no-scrollbar max-w-[900px] mx-auto w-full">
 
-            <div ref={bottomRef} />
-          </div>
+                {messages.map((msg) => (
+                  <div key={msg.id} className="mb-12">
+                    {/* User prompt bubble */}
+                    <div className="flex flex-col items-end mb-8">
+                      <div className="flex items-center gap-2 mb-2 mr-1">
+                        <span className="text-[10px] font-medium text-on-surface-variant bg-surface-container-high dark:bg-[#2a2a2a] px-2 py-0.5 rounded-full">
+                          {msg.payload.authorName} · {msg.payload.publication}
+                        </span>
+                      </div>
+                      <div className="bg-primary-container dark:bg-[#1E3A5F] text-white px-5 py-3.5 rounded-2xl rounded-tr-sm max-w-[85%] md:max-w-[70%] shadow-[0_4px_12px_rgba(37,99,235,0.15)] text-[14px] leading-relaxed">
+                        {msg.payload.sourceText.length > 250
+                          ? msg.payload.sourceText.substring(0, 250) + '...'
+                          : msg.payload.sourceText}
+                      </div>
+                    </div>
 
-          {/* Input bar */}
-          <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
+                    {/* Loading / Results */}
+                    {msg.isLoading ? (
+                      <div>
+                        <div className="flex items-center gap-3 mb-6 ml-2">
+                          <span className="material-symbols-outlined text-primary dark:text-[#3B82F6] animate-spin-slow" style={{ fontSize: 18 }}>
+                            progress_activity
+                          </span>
+                          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-primary dark:text-[#3B82F6]">
+                            Generating Headlines
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {RESULT_TYPES.map(type => (
+                            <HeadlineCard key={type} type={type} isLoading={true} />
+                          ))}
+                        </div>
+                      </div>
+                    ) : msg.results ? (
+                      <div>
+                        <div className="flex items-center gap-2 mb-6 ml-2">
+                          <span className="w-2 h-2 rounded-full bg-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+                          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#10B981]">
+                            Generation Complete
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {RESULT_TYPES.map(type => {
+                            const result = msg.results[type];
+                            const copyKey = `${msg.id}-${type}`;
+                            return (
+                              <HeadlineCard
+                                key={type}
+                                type={type}
+                                headline={result?.headline || 'Unavailable'}
+                                rougeL={type === 'cold_start_sv' ? result?.rouge_l : undefined}
+                                latencyMs={result?.latency_ms}
+                                isLoading={false}
+                                isCopied={copiedId === copyKey}
+                                onCopy={(text) => handleCopy(text, copyKey)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+
+                {error && (
+                  <div className="px-4 py-3 bg-error-container text-error rounded-lg text-[13px] mb-6">
+                    {error}
+                  </div>
+                )}
+
+                <div ref={bottomRef} />
+              </div>
+
+              {/* Pinned InputBar — flex-shrink-0, no overlap */}
+              <div className="flex-shrink-0 w-full mx-auto" style={{ maxWidth: 870, padding: '0 16px' }}>
+                <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
+              </div>
+            </>
+          )}
         </main>
       </div>
     </div>
