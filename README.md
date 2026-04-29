@@ -4,7 +4,6 @@
 
 [![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://stylevector.vercel.app)
 [![Modal GPU](https://img.shields.io/badge/Modal-GPU%20Inference-green?style=for-the-badge)](https://modal.com)
-[![Paper](https://img.shields.io/badge/Research-Paper-red?style=for-the-badge)](ml/docs/research_paper.pdf)
 
 ---
 
@@ -48,7 +47,6 @@ Given a news article body and a journalist's name, generate a headline that soun
 │   ├── src/           Pipeline scripts (extraction, inference, evaluation)
 │   ├── scripts/       Deployment & utility scripts
 │   ├── scraping/      TOI + HT web scrapers
-│   └── docs/          Research paper, project plans
 ├── README.md          This file
 └── .gitignore
 ```
@@ -154,7 +152,7 @@ Evaluation is per-class (rich / mid / sparse) to measure cold-start improvement 
 | Name | Role | ID |
 |------|------|----|
 | Dharmik Mistry | ML Pipeline, Deployment | 202311039 |
-| Khushali Mandalia | Frontend, Backend | - |
+| Khushali Mandalia | Frontend, Backend, Deployment | 202511025 |
 
 **Course:** Deep Learning (IT549) · M.Tech ICT (ML) · DA-IICT, Gandhinagar
 
