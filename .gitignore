@@ -67,4 +67,4 @@ wandb/
 
 # ── Antigravity agent ───────────────────────────────────
 .gemini/
-.agents/
+.agents/workflows/
