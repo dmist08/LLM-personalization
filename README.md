@@ -1,80 +1,165 @@
-# Cold-Start StyleVector
+# Cold-Start StyleVector — Personalized Headline Generation
 
-**Personalized Headline Generation for Journalists with Sparse Writing History**
+> **End-to-End Deep Learning Application** · IT549 Deep Learning · DA-IICT, Gandhinagar
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://stylevector.vercel.app)
+[![Modal GPU](https://img.shields.io/badge/Modal-GPU%20Inference-green?style=for-the-badge)](https://modal.com)
+[![Paper](https://img.shields.io/badge/Research-Paper-red?style=for-the-badge)](ml/docs/research_paper.pdf)
 
-## Overview
+---
 
-This project extends the [StyleVector paper](https://arxiv.org/abs/2503.05213) (Zhang et al., March 2025) to solve the **cold-start problem** in personalized text generation. StyleVector captures individual writing styles as linear directions in an LLM's activation space — but it requires 50+ articles per author to compute a reliable style vector.
+## 🎯 Objective
 
-**Our contribution:** A cluster-centroid interpolation method that enables personalized headline generation for journalists with as few as 3–5 published articles, by borrowing stylistic patterns from similar established writers.
+Given a news article body and a journalist's name, generate a headline that sounds like *that journalist* wrote it — matching vocabulary, tone, sentence rhythm, and editorial stance.
 
-## Method
+**The Problem:** The [StyleVector paper](https://arxiv.org/abs/2503.05213) (Zhang et al., 2025) requires 50–287 articles per journalist to compute a reliable style vector. It explicitly degrades for journalists with fewer than 20 articles and leaves the cold-start problem as future work.
 
-1. **Build rich-author cluster pool** using LaMP-4 (12,527 users, avg 292 articles each)
-2. **Extract style vectors** via contrastive activation steering (per the paper)
-3. **PCA + KMeans clustering** to find natural style groupings
-4. **Interpolate** for sparse journalists: `s_cold = α × s_partial + (1-α) × centroid_nearest`
+**Our Contribution:** A **cluster-centroid interpolation method** that solves the cold-start problem for sparse journalists. Even a journalist with only 3–10 published articles can receive a meaningful style vector by borrowing writing patterns from statistically similar established journalists.
 
-## Datasets
+---
 
-| Dataset | Size | Use |
-|---------|------|-----|
-| **LaMP-4** (News Headlines) | 12,527 train / 1,925 dev / 2,376 test users | Rich-author cluster pool + evaluation |
-| **TOI + HT** (Indian journalism) | 9,284 articles, 42 journalists | Cold-start evaluation |
-
-## Project Structure
+## 🏗️ Architecture
 
 ```
-DL/
-├── src/                    # Core source code
-│   ├── data/               # Data loaders and processors
-│   ├── baselines/          # No-personalization + RAG BM25
-│   ├── style_vectors/      # Extraction + aggregation
-│   ├── cold_start/         # PCA, KMeans, interpolation
-│   ├── training/           # QLoRA fine-tuning
-│   ├── evaluation/         # ROUGE-L + METEOR scoring
-│   └── config.py           # Central configuration
-├── scraping/               # TOI + HT web scrapers
-├── scripts/                # Pipeline runners + utilities
-├── data/                   # Raw and processed datasets
-├── models/                 # Trained model checkpoints
-├── notebooks/              # EDA and analysis notebooks
-├── backend/                # FastAPI deployment
-├── frontend/               # React frontend
-└── docs/                   # Project documentation
+┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐
+│   Frontend   │────▶│   Backend    │────▶│   Modal GPU Inference    │
+│  React+Vite  │     │  Flask API   │     │  LLaMA-3.1-8B-Instruct  │
+│  (Vercel)    │◀────│  (Railway)   │◀────│  A10G GPU (Modal.com)    │
+└──────────────┘     └──────────────┘     └──────────────────────────┘
 ```
 
-## Quick Start
+**Four generation methods compared side-by-side:**
+
+| Method | Description |
+|--------|-------------|
+| **No Personalization** | Base LLM with no style steering |
+| **RAG BM25** | Retrieval-augmented generation using BM25 retrieval of similar past headlines |
+| **StyleVector** | Activation steering using contrastive style vectors (original paper method) |
+| **Cold-Start StyleVector** | Our novel method — interpolated cluster-centroid vectors for sparse journalists |
+
+---
+
+## 📂 Repository Structure
+
+```
+├── frontend/          React + Vite + TailwindCSS frontend
+├── backend/           Flask API server (proxies to Modal GPU)
+├── ml/                ML pipeline, training, evaluation, and research
+│   ├── src/           Pipeline scripts (extraction, inference, evaluation)
+│   ├── scripts/       Deployment & utility scripts
+│   ├── scraping/      TOI + HT web scrapers
+│   └── docs/          Research paper, project plans
+├── README.md          This file
+└── .gitignore
+```
+
+See each folder's README for details:
+- [`frontend/README.md`](frontend/README.md) — UI setup and deployment
+- [`backend/README.md`](backend/README.md) — API setup and endpoints
+- [`ml/README.md`](ml/README.md) — ML pipeline, training, and evaluation
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js 18+ and npm
+- Python 3.10+
+- A running Modal GPU endpoint (or use our deployed one)
+
+### 1. Frontend (React + Vite)
 
 ```bash
-# Environment setup
-conda activate dl
-pip install -r requirements.txt
-
-# Run Phase 2 data pipeline
-python scripts/run_phase2.py
-
-# Run individual steps
-python -m src.data.validate_indian_data   # Clean Indian news
-python -m src.data.split_dataset          # Train/val/test splits
-python -m src.data.lamp4_loader           # Load LaMP-4
+cd frontend
+npm install
+npm run dev
+# Opens at http://localhost:5173
 ```
 
-## Technical Stack
+### 2. Backend (Flask API)
 
-- **LLM:** LLaMA-3.1-8B-Instruct (base + QLoRA fine-tuned)
-- **Style extraction:** PyTorch `register_forward_hook` (contrastive activation steering)
-- **Clustering:** scikit-learn PCA + KMeans
-- **RAG baseline:** rank_bm25
-- **Evaluation:** ROUGE-L + METEOR
-- **Experiment tracking:** Weights & Biases
-- **Deployment:** FastAPI + React (HuggingFace Spaces + Vercel)
+```bash
+cd backend
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your Modal URL and MongoDB URI
+python app.py
+# Runs at http://localhost:5000
+```
 
-## Author
+### 3. Full Stack (Local Development)
 
-Dharmik Mistry (202311039) · M.Tech ICT (ML) · DA-IICT, Gandhinagar  
-Course: Deep Learning (IT549) · End-to-End ML Application Project
-"# LLM-personalization" 
+The frontend proxies `/api` requests to `localhost:5000` via Vite's dev server. Start both servers and open `http://localhost:5173`.
+
+---
+
+## 📊 Dataset
+
+Custom-scraped dataset of **Indian English journalism**:
+
+| Source | Articles | Journalists | Period |
+|--------|----------|-------------|--------|
+| Times of India (TOI) | 3,318 | 18 | 2020–2025 |
+| Hindustan Times (HT) | 6,601 | 25 | 2020–2025 |
+| **Total** | **9,919** | **42** (unique, no overlap) | |
+
+**Split:** 6,480 train / 1,392 val / 1,414 test (stratified by author)
+
+Additionally uses **LaMP-4** (Zhang et al.) — 500 rich Western English journalists with ≥50 articles each — as the cross-domain cluster pool for cold-start interpolation.
+
+---
+
+## 🧠 Novel Contribution
+
+### Cold-Start Cluster-Centroid Interpolation
+
+1. **Build a rich-author cluster pool** from LaMP-4 style vectors (≥50 articles/author)
+2. **PCA** reduce 4096D → 50D (curse of dimensionality mitigation)
+3. **KMeans clustering** with silhouette-based k selection
+4. **Interpolate** sparse journalist's noisy partial vector with nearest cluster centroid:
+   ```
+   s_cold = α × s_partial + (1 − α) × centroid_nearest
+   ```
+5. **Sweep α** on validation set to find optimal blend
+
+---
+
+## 🔬 Evaluation Methods
+
+| Metric | Description |
+|--------|-------------|
+| ROUGE-L | Longest common subsequence overlap with ground-truth headline |
+| METEOR | Semantic similarity accounting for synonyms and paraphrasing |
+
+Evaluation is per-class (rich / mid / sparse) to measure cold-start improvement specifically on the target population.
+
+---
+
+## 🛠️ Technical Stack
+
+| Component | Technology |
+|-----------|-----------|
+| LLM | Meta LLaMA-3.1-8B-Instruct |
+| Fine-tuning | LoRA (rank=16, attention layers only) |
+| Inference | Modal.com A10G GPU |
+| Frontend | React 18 + Vite + TailwindCSS |
+| Backend | Flask + MongoDB Atlas |
+| Deployment | Vercel (frontend) + Modal (GPU) |
+| Vector Extraction | PyTorch activation hooks |
+
+---
+
+## 👥 Team
+
+| Name | Role | ID |
+|------|------|----|
+| Dharmik Mistry | ML Pipeline, Deployment | 202311039 |
+| Khushali Mandalia | Frontend, Backend | - |
+
+**Course:** Deep Learning (IT549) · M.Tech ICT (ML) · DA-IICT, Gandhinagar
+
+---
+
+## 📄 License
+
+This project is for academic purposes as part of the IT549 Deep Learning course at DA-IICT.
