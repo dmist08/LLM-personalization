@@ -43,7 +43,7 @@ ml/logs/
 *.gguf
 
 # ── Docs (keep plans + paper, ignore chat logs) ─────────
-ml/docs/
+ml/docs
 
 # ── Scraping artifacts ──────────────────────────────────
 ml/scraping/**/*.bak
