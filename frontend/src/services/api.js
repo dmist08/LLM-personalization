@@ -7,7 +7,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const api = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 60000, // 60s — LLM calls can be slow
+  timeout: 300000, // 5min — Modal cold starts can take 90-180s
 });
 
 // ─── Authors ───────────────────────────────────────────────────────────────
