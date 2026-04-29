@@ -3,9 +3,11 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from '../components/Sidebar';
 import InputBar from '../components/InputBar';
 import HeadlineCard from '../components/HeadlineCard';
+import MetricsChart from '../components/MetricsChart';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { generateHeadlines, getChatSession } from '../services/api';
+import { computeMetrics } from '../utils/metrics';
 
 const RESULT_TYPES = ['no_personalization', 'rag_bm25', 'stylevector', 'cold_start_sv'];
 
@@ -199,16 +201,33 @@ export default function ChatPage() {
                             Generation Complete
                           </span>
                         </div>
+
+                        {/* Ground truth reference */}
+                        {msg.payload?.groundTruth && (
+                          <div className="mb-4 px-4 py-3 rounded-lg border border-dashed border-outline-variant/30 dark:border-[#2a2a2a] bg-surface-container/30 dark:bg-[#161616]">
+                            <div className="text-[10px] font-bold tracking-[0.08em] uppercase text-outline mb-1">
+                              GROUND TRUTH
+                            </div>
+                            <p className="text-[14px] font-medium text-on-surface dark:text-[#F8F9FF]">
+                              {msg.payload.groundTruth}
+                            </p>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {RESULT_TYPES.map(type => {
                             const result = msg.results[type];
                             const copyKey = `${msg.id}-${type}`;
+                            // Compute metrics if ground truth provided
+                            const metrics = msg.payload?.groundTruth
+                              ? computeMetrics(result?.headline, msg.payload.groundTruth)
+                              : null;
                             return (
                               <HeadlineCard
                                 key={type}
                                 type={type}
                                 headline={result?.headline || 'Unavailable'}
-                                rougeL={type === 'cold_start_sv' ? result?.rouge_l : undefined}
+                                rougeL={metrics?.rougeL}
                                 latencyMs={result?.latency_ms}
                                 isLoading={false}
                                 isCopied={copiedId === copyKey}
@@ -217,6 +236,18 @@ export default function ChatPage() {
                             );
                           })}
                         </div>
+
+                        {/* Metrics comparison chart */}
+                        {msg.payload?.groundTruth && (() => {
+                          const metricsMap = {};
+                          RESULT_TYPES.forEach(type => {
+                            const result = msg.results[type];
+                            if (result?.headline) {
+                              metricsMap[type] = computeMetrics(result.headline, msg.payload.groundTruth);
+                            }
+                          });
+                          return <MetricsChart metricsMap={metricsMap} />;
+                        })()}
                       </div>
                     ) : null}
                   </div>

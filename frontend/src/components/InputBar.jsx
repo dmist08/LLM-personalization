@@ -21,6 +21,8 @@ export default function InputBar({ onGenerate, isGenerating }) {
   const [authors, setAuthors] = useState([]);
   const [authorId, setAuthorId] = useState('');
   const [sourceText, setSourceText] = useState('');
+  const [groundTruth, setGroundTruth] = useState('');
+  const [showGroundTruth, setShowGroundTruth] = useState(false);
   const [loadingAuthors, setLoadingAuthors] = useState(false);
 
   const textareaRef = useRef(null);
@@ -70,6 +72,7 @@ export default function InputBar({ onGenerate, isGenerating }) {
       publicationLabel: pub?.label || publication,
       authorId,
       authorName: author?.name || authorId,
+      groundTruth: groundTruth.trim() || null,
     });
   };
 
@@ -178,6 +181,45 @@ export default function InputBar({ onGenerate, isGenerating }) {
 
         {/* ── Divider ──────────────────────────────────────── */}
         <div style={{ height: 1, background: 'rgba(127,127,127,0.10)', margin: '0 12px' }} />
+
+        {/* ── Ground Truth Toggle + Input ───────────────────── */}
+        <div style={{ padding: '6px 12px 0' }}>
+          <button
+            type="button"
+            onClick={() => setShowGroundTruth(s => !s)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: 11, fontWeight: 500, cursor: 'pointer',
+              color: isDark ? '#9CA3AF' : '#6B7280',
+              background: 'none', border: 'none', padding: '2px 0',
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14, transition: 'transform 0.15s', transform: showGroundTruth ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+              chevron_right
+            </span>
+            Ground Truth (optional)
+            {groundTruth && <span style={{ color: '#10B981', marginLeft: 4 }}>✓</span>}
+          </button>
+          {showGroundTruth && (
+            <input
+              type="text"
+              value={groundTruth}
+              onChange={e => setGroundTruth(e.target.value)}
+              placeholder="Paste the real headline for ROUGE-L comparison…"
+              style={{
+                width: '100%',
+                marginTop: 4,
+                padding: '6px 10px',
+                fontSize: 12,
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+                borderRadius: 6,
+                background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
+                color: isDark ? '#F8F9FF' : '#111',
+                outline: 'none',
+              }}
+            />
+          )}
+        </div>
 
         {/* ── Bottom row: Source · Author · Word count ─────── */}
         <div style={{
