@@ -8,10 +8,10 @@ from db.mongo import get_collection
 
 generate_bp = Blueprint("generate", __name__)
 
-# ── Fix 1: Fail loudly if URL missing ─────────────────────────
+# ── LLM endpoint URL ──────────────────────────────────────────
 LLM_URL = os.environ.get("MODAL_LLM_URL", "").rstrip("/")
 if not LLM_URL:
-    raise RuntimeError("MODAL_LLM_URL is not set in .env — cannot start Flask server.")
+    print("[WARNING] MODAL_LLM_URL is not set in .env — /generate will fail.")
 
 # ── Fix 2: Bump timeout for cold starts ───────────────────────
 TIMEOUT = int(os.environ.get("LLM_TIMEOUT_SECONDS", 180))
