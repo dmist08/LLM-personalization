@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getAuthors } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
+import CustomSelect from './CustomSelect';
 
 const PUBLICATIONS = [
   { code: 'TOI', label: 'The Times of India' },
@@ -72,6 +73,10 @@ export default function InputBar({ onGenerate, isGenerating }) {
     });
   };
 
+  /* ── Build options for CustomSelect ───────────────────── */
+  const pubOptions = PUBLICATIONS.map(p => ({ value: p.code, label: p.label }));
+  const authorOptions = authors.map(a => ({ value: a.id, label: a.name }));
+
   /* ── Styles (inline so no Tailwind conflicts) ────────── */
   const wrapperStyle = {
     width: '100%',
@@ -85,7 +90,7 @@ export default function InputBar({ onGenerate, isGenerating }) {
     border: '1px solid rgba(127,127,127,0.15)',
     boxShadow: '0 8px 32px rgba(0,0,0,0.10)',
     background: 'transparent',
-    overflow: 'hidden',
+    overflow: 'visible',  // allow dropdown to overflow
   };
 
   return (
@@ -183,33 +188,25 @@ export default function InputBar({ onGenerate, isGenerating }) {
           flexWrap: 'wrap',
         }}>
           {/* Source dropdown */}
-          <select
+          <CustomSelect
             id="source-select"
+            options={pubOptions}
             value={publication}
-            onChange={e => setPublication(e.target.value)}
-            style={getSelectStyle(isDark)}
-          >
-            <option value="">Source…</option>
-            {PUBLICATIONS.map(p => (
-              <option key={p.code} value={p.code}>{p.label}</option>
-            ))}
-          </select>
+            onChange={setPublication}
+            placeholder="Source…"
+            isDark={isDark}
+          />
 
           {/* Author dropdown */}
-          <select
+          <CustomSelect
             id="author-select"
+            options={authorOptions}
             value={authorId}
-            onChange={e => setAuthorId(e.target.value)}
+            onChange={setAuthorId}
+            placeholder={loadingAuthors ? 'Loading…' : 'Author…'}
             disabled={!publication || loadingAuthors}
-            style={{ ...getSelectStyle(isDark), opacity: (!publication || loadingAuthors) ? 0.5 : 1 }}
-          >
-            <option value="">
-              {loadingAuthors ? 'Loading…' : 'Author…'}
-            </option>
-            {authors.map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
+            isDark={isDark}
+          />
 
           {/* Spacer */}
           <span style={{ flex: 1 }} />
@@ -233,25 +230,3 @@ export default function InputBar({ onGenerate, isGenerating }) {
     </div>
   );
 }
-
-/* Shared select style — accepts isDark to set colorScheme for native dropdown */
-const getSelectStyle = (isDark) => ({
-  height: 30,
-  padding: '0 10px',
-  borderRadius: 8,
-  border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
-  background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.04)',
-  fontSize: 12,
-  fontWeight: 500,
-  cursor: 'pointer',
-  color: isDark ? '#F8F9FF' : '#111',
-  outline: 'none',
-  transition: 'border-color 0.15s',
-  appearance: 'none',
-  WebkitAppearance: 'none',
-  paddingRight: 28,
-  colorScheme: isDark ? 'dark' : 'light',
-  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${isDark ? '%23aaa' : '%23888'}' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
-  backgroundRepeat: 'no-repeat',
-  backgroundPosition: 'right 8px center',
-});
