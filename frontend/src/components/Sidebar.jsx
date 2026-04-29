@@ -74,9 +74,13 @@ export default function Sidebar({ onNewChat, onCollapse }) {
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className="w-8 h-8 rounded-full bg-primary-container dark:bg-[#1E3A5F]
                      text-white flex items-center justify-center font-semibold
-                     text-xs flex-shrink-0 hover:opacity-80 active:scale-95 transition-all"
+                     text-xs flex-shrink-0 hover:opacity-80 active:scale-95 transition-all overflow-hidden"
         >
-          {user?.name?.substring(0, 2).toUpperCase() || 'SV'}
+          {user?.picture ? (
+            <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            user?.name?.substring(0, 2).toUpperCase() || 'SV'
+          )}
         </button>
 
         <div style={labelStyle} className="flex flex-col">
