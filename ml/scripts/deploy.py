@@ -3,7 +3,7 @@ deploy.py — Modal LLM endpoint for Cold-Start StyleVector.
 
 Serves all 5 methods LIVE on a single A10G (24GB VRAM):
   1. no_personalization  — plain LLaMA generate
-  2. rag_bm25            — generate with author/publication context
+  2. rag_bm25            — same-author BM25 retrieval + in-context examples
   3. stylevector         — activation steering at layer 15
   4. cold_start_sv       — activation steering with interpolated vector
   5. lora_finetuned      — PEFT LoRA adapter generate
@@ -56,8 +56,8 @@ vectors_vol = modal.Volume.from_name("stylevector-data", create_if_missing=True)
 BASE_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 LORA_REPO = "dmist36/llama31-stylevector-lora-indian"  # LoRA adapter on HF Hub
 BEST_LAYER = 15
-BEST_ALPHA = 0.6       # Steering strength for StyleVector
-CS_ALPHA = 0.6         # Cold-start interpolation alpha (from fit)
+STEERING_ALPHA = 0.5   # Activation steering strength from layer sweep
+CS_ALPHA = 0.6         # Cold-start interpolation alpha from validation sweep
 VECTORS_DIR = "/vectors"
 MINUTES = 60
 RAG_TOP_K = 2
@@ -190,6 +190,24 @@ class StyleVectorLLM:
                 return truncated[: i + 1]
         return truncated
 
+    def _prepare_article(self, article: str) -> str:
+        """
+        Clean user-pasted article text before generation.
+
+        Scraped articles often start with the original headline/title on line 1.
+        Leaving that line in gives every method, especially base, an unfair copy
+        target. Remove a short leading title line when the remaining body is
+        substantial, then apply the canonical sentence-boundary truncation.
+        """
+        text = (article or "").strip()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) >= 2:
+            first_words = lines[0].split()
+            rest_words = " ".join(lines[1:]).split()
+            if 4 <= len(first_words) <= 30 and len(rest_words) >= 40:
+                text = " ".join(lines[1:])
+        return self._truncate_to_sentence(text)
+
     def _load_rag_indices(self, train_path: str) -> dict:
         """Build per-author BM25 indexes from Indian training records."""
         by_author = {}
@@ -274,12 +292,12 @@ class StyleVectorLLM:
 
     def _build_rag_prompt(self, article: str, author_id: str) -> str:
         """Build the same-author BM25 RAG prompt used by the offline baseline."""
-        examples = self._bm25_retrieve(author_id, article, k=RAG_TOP_K)
+        article_clean = self._prepare_article(article)
+        examples = self._bm25_retrieve(author_id, article_clean, k=RAG_TOP_K)
         if not examples:
-            article_short = self._truncate_words(article)
             return (
                 "Write a concise news headline for the following article:\n\n"
-                f"{article_short}\n\nHeadline:"
+                f"{self._truncate_words(article_clean)}\n\nHeadline:"
             )
 
         parts = ["Here are past headlines written by this journalist:\n"]
@@ -288,7 +306,7 @@ class StyleVectorLLM:
             parts.append(f"Headline: {ex['headline']}\n")
 
         parts.append("Now write a headline for the following article:")
-        parts.append(f"Article: {self._truncate_words(article)}\n")
+        parts.append(f"Article: {self._truncate_words(article_clean)}\n")
         parts.append("Headline:")
         return "\n".join(parts)
 
@@ -355,11 +373,11 @@ class StyleVectorLLM:
                 vec = self.style_vectors[author_id]
             else:
                 # Fallback — no vector available
-                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
+                prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
                 return self._generate_base(prompt)
         else:
             if author_id not in self.style_vectors:
-                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
+                prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
                 return self._generate_base(prompt)
             vec = self.style_vectors[author_id]
 
@@ -373,7 +391,7 @@ class StyleVectorLLM:
             # output is a tuple: (hidden_states, ...)
             modified = list(output)
             # Add style vector to all generated token positions
-            modified[0] = modified[0] + BEST_ALPHA * style_tensor
+            modified[0] = modified[0] + STEERING_ALPHA * style_tensor
             return tuple(modified)
 
         # Hook into the correct layer
@@ -381,7 +399,7 @@ class StyleVectorLLM:
         hook_handle = layer.register_forward_hook(steering_hook)
 
         try:
-            prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
+            prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
             if self.lora_model is not None:
                 with self.lora_model.disable_adapter():
                     result = self._generate(self.lora_model, prompt)
@@ -402,7 +420,7 @@ class StyleVectorLLM:
 
         try:
             if method == "no_personalization":
-                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
+                prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
                 headline = self._generate_base(prompt)
 
             elif method == "rag_bm25":
@@ -424,7 +442,7 @@ class StyleVectorLLM:
                     )
                     prompt = LORA_PROMPT.format(
                         author_name=author_name,
-                        article=self._truncate_to_sentence(article),
+                        article=self._prepare_article(article),
                     )
                     headline = self._generate(self.lora_model, prompt)
             else:
