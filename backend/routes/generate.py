@@ -104,7 +104,6 @@ def generate():
     body        = request.get_json(force=True)
     source_text = (body.get("source_text") or "").strip()
     author_id   = (body.get("author_id")   or "").strip()
-    author_name = (body.get("author_name") or author_id).strip()
     publication = (body.get("publication") or "").strip()
     session_id  = body.get("session_id")
     user_id     = body.get("user_id", "anonymous")
@@ -167,7 +166,6 @@ def generate():
                     "session_id":  new_session_id,
                     "user_id":     user_id,
                     "author_id":   author_id,
-                    "author_name": author_name,
                     "publication": publication,
                     "updated_at":  now,
                     "preview":     source_text[:120],
