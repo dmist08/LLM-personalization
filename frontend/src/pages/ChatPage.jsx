@@ -64,7 +64,11 @@ export default function ChatPage() {
     }]);
 
     try {
-      const data = await generateHeadlines({ ...payload, sessionId });
+      const data = await generateHeadlines({
+        ...payload,
+        sessionId,
+        userId: user?.id || 'anonymous',
+      });
       console.log('[ChatPage] generateHeadlines raw response:', data);
       console.log('[ChatPage] data.results:', data?.results);
       setMessages(prev => {

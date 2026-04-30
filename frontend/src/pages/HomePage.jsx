@@ -23,7 +23,11 @@ export default function HomePage() {
     setIsGenerating(true);
     setError(null);
     try {
-      const data = await generateHeadlines({ ...payload, sessionId: null });
+      const data = await generateHeadlines({
+        ...payload,
+        sessionId: null,
+        userId: user?.id || 'anonymous',
+      });
       // Navigate to chat page with results embedded in state
       navigate(`/chat/${data.session_id}`, { state: { results: data, payload } });
     } catch (err) {

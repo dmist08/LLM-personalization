@@ -43,12 +43,14 @@ export const getAuthors = async (publication = null) => {
 //     cold_start_sv:      { headline, rouge_l, latency_ms }
 //   }
 // }
-export const generateHeadlines = async ({ sourceText, publication, authorId, sessionId = null }) => {
+export const generateHeadlines = async ({ sourceText, publication, authorId, authorName, sessionId = null, userId = null }) => {
   const { data } = await api.post('/generate', {
     source_text: sourceText,
     publication,
     author_id: authorId,
+    author_name: authorName || authorId,
     session_id: sessionId,
+    user_id: userId,
   });
   return data;
 };
