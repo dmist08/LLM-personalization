@@ -2,7 +2,7 @@
 
 > **End-to-End Deep Learning Application** · IT549 Deep Learning · DA-IICT, Gandhinagar
 
-[![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://stylevector.vercel.app)
+[![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://llm-personalization.vercel.app/)
 [![Modal GPU](https://img.shields.io/badge/Modal-GPU%20Inference-green?style=for-the-badge)](https://modal.com)
 
 ---
