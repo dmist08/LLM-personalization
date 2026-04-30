@@ -23,7 +23,6 @@ export default function ChatPage() {
   const [error, setError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [historyVersion, setHistoryVersion] = useState(0);
   const bottomRef = useRef(null);
 
   const sidebarW = sidebarCollapsed ? 64 : 260;
@@ -61,16 +60,12 @@ export default function ChatPage() {
       console.log('[ChatPage] generateHeadlines raw response:', data);
       console.log('[ChatPage] lora result:', data?.results?.lora);  // ← add this
       setMessages(prev =>
-        prev.map(m => {
-          if (m.id === tempId) {
-            const updated = { id: data.session_id, payload, results: data.results, isLoading: false };
-            console.log('[ChatPage] updated msg.results.lora:', updated.results?.lora); // ← add
-            return updated;
-          }
-          return m;
-        })
+        prev.map(m =>
+          m.id === tempId
+            ? { id: data.session_id, payload, results: data.results, isLoading: false }
+            : m
+        )
       );
-      setHistoryVersion(v => v + 1); // tell Sidebar to re-fetch history
     } catch (err) {
       setError(err.response?.data?.error || 'Generation failed. Please try again.');
       setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -89,7 +84,7 @@ export default function ChatPage() {
     <div className={`${isDark ? 'dark' : ''}`}>
       <div className="bg-surface dark:bg-[#0F0F0F] text-on-surface dark:text-[#F8F9FF] h-screen flex overflow-hidden transition-colors duration-300">
 
-        <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} historyVersion={historyVersion} />
+        <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} />
 
         <main
           style={{ marginLeft: sidebarW, transition: 'margin-left 0.25s cubic-bezier(0.4,0,0.2,1)' }}
@@ -178,8 +173,6 @@ export default function ChatPage() {
                     ) : msg.results ? (
                       <div>
                         {/* Complete banner */}
-                        {console.log('[RENDER] msg.results:', msg.results)}         {/* ← add */}
-                        {console.log('[RENDER] msg.results.lora:', msg.results?.lora)} {/* ← add */}
                         <div className="flex items-center gap-2 mb-5 ml-2">
                           <span className="w-2 h-2 rounded-full bg-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
                           <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#10B981]">
@@ -233,16 +226,16 @@ export default function ChatPage() {
                           <div className="col-span-2">
                             <HeadlineCard
                               type="lora"
-                              headline={msg.results?.lora_finetuned?.headline || 'Unavailable'}
+                              headline={msg.results?.lora?.headline || 'Unavailable'}
                               rougeL={
-                                msg.payload?.groundTruth && msg.results?.lora_finetuned?.headline
-                                  ? computeMetrics(msg.results.lora_finetuned.headline, msg.payload.groundTruth)?.rougeL
+                                msg.payload?.groundTruth && msg.results?.lora?.headline
+                                  ? computeMetrics(msg.results.lora.headline, msg.payload.groundTruth)?.rougeL
                                   : undefined
                               }
-                              latencyMs={msg.results?.lora_finetuned?.latency_ms}
+                              latencyMs={msg.results?.lora?.latency_ms}
                               isLoading={false}
-                              isCopied={copiedId === `${msg.id}-lora_finetuned`}
-                              onCopy={(text) => handleCopy(text, `${msg.id}-lora_finetuned`)}
+                              isCopied={copiedId === `${msg.id}-lora`}
+                              onCopy={(text) => handleCopy(text, `${msg.id}-lora`)}
                             />
                           </div>
 
@@ -251,9 +244,9 @@ export default function ChatPage() {
                         {/* Metrics chart — includes lora now */}
                         {msg.payload?.groundTruth && (() => {
                           const metricsMap = {};
-                          [...RESULT_TYPES, 'lora_finetuned'].forEach(type => {
-                            const headline = type === 'lora_finetuned'
-                              ? msg.results?.lora_finetuned?.headline
+                          [...RESULT_TYPES, 'lora'].forEach(type => {
+                            const headline = type === 'lora'
+                              ? msg.results?.lora?.headline
                               : msg.results[type]?.headline;
                             if (headline) {
                               metricsMap[type] = computeMetrics(headline, msg.payload.groundTruth);

@@ -74,10 +74,6 @@ export default function InputBar({ onGenerate, isGenerating }) {
       authorName: author?.name || authorId,
       groundTruth: groundTruth.trim() || null,
     });
-    // Clear text fields after submission — do not auto-fill on response
-    setSourceText('');
-    setGroundTruth('');
-    setShowGroundTruth(false);
   };
 
   /* ── Build options for CustomSelect ───────────────────── */

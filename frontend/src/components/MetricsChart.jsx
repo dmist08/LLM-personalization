@@ -1,107 +1,155 @@
-/**
- * MetricsChart — ROUGE-L horizontal bar chart
- * Matches the design in the uploaded reference image.
- */
+import { useTheme } from '../context/ThemeContext';
 
-const METHOD_META = {
-  stylevector: { label: 'SV', color: '#22C55E' },  // green
-  lora_finetuned: { label: 'lora_finetuned', color: '#94A3B8' }, // slate
-  no_personalization: { label: 'Base', color: '#94A3B8' },  // slate
-  rag_bm25: { label: 'RAG', color: '#FBBF24' },  // amber
-  cold_start_sv: { label: 'CS-SV', color: '#818CF8' },  // indigo
+const METHOD_LABELS = {
+  no_personalization: 'Base',
+  rag_bm25: 'RAG',
+  stylevector: 'SV',
+  cold_start_sv: 'CS-SV',
 };
 
+const METHOD_COLORS = {
+  no_personalization: '#9CA3AF',
+  rag_bm25: '#F59E0B',
+  stylevector: '#10B981',
+  cold_start_sv: '#3B82F6',
+};
+
+/**
+ * MetricsChart — Visual bar chart comparing ROUGE-L scores across methods.
+ * Shows horizontal bars with labels and numeric values.
+ */
 export default function MetricsChart({ metricsMap }) {
+  const { isDark } = useTheme();
+
   if (!metricsMap || Object.keys(metricsMap).length === 0) return null;
 
-  // Build rows sorted by rougeL descending
-  const rows = Object.entries(METHOD_META)
-    .filter(([key]) => metricsMap[key])
-    .map(([key, meta]) => ({
-      key,
-      label: meta.label,
-      color: meta.color,
-      rougeL: metricsMap[key]?.rougeL ?? 0,
-      overlap: metricsMap[key]?.overlap ?? 0,
-    }))
-    .sort((a, b) => b.rougeL - a.rougeL);
+  const entries = Object.entries(metricsMap)
+    .filter(([, m]) => m && m.rougeL != null)
+    .sort((a, b) => b[1].rougeL - a[1].rougeL);
 
-  if (rows.length === 0) return null;
+  if (entries.length === 0) return null;
 
-  const maxRouge = Math.max(...rows.map(r => r.rougeL), 0.001);
+  const maxScore = Math.max(...entries.map(([, m]) => m.rougeL), 0.01);
 
   return (
-    <div className="mt-6 bg-surface-container-lowest dark:bg-[#1C1C1C] border border-surface-variant/30 dark:border-[#2a2a2a] rounded-[8px] p-5">
-
+    <div
+      style={{
+        background: isDark ? '#1C1C1C' : '#fff',
+        border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
+        borderRadius: 10,
+        padding: '16px 20px',
+        marginTop: 16,
+      }}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <span className="text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface dark:text-[#F8F9FF]">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <span style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: isDark ? '#9CA3AF' : '#6B7280',
+        }}>
           ROUGE-L Comparison
         </span>
-        <span className="text-[11px] text-on-surface-variant dark:text-[#9CA3AF]">
+        <span style={{
+          fontSize: 10,
+          color: isDark ? '#6B7280' : '#9CA3AF',
+        }}>
           vs Ground Truth
         </span>
       </div>
 
       {/* Bars */}
-      <div className="flex flex-col gap-3">
-        {rows.map(row => {
-          const pct = maxRouge > 0 ? (row.rougeL / maxRouge) * 100 : 0;
-          const isTop = row.key === rows[0].key;
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {entries.map(([method, metrics]) => {
+          const barWidth = Math.max((metrics.rougeL / maxScore) * 100, 2);
+          const color = METHOD_COLORS[method] || '#888';
+          const label = METHOD_LABELS[method] || method;
+          const isBest = entries[0][0] === method;
 
           return (
-            <div key={row.key} className="flex items-center gap-3">
+            <div key={method} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {/* Label */}
-              <div className="w-[100px] flex-shrink-0 text-right">
-                <span className={`text-[12px] font-medium ${isTop
-                    ? 'font-semibold'
-                    : 'text-on-surface-variant dark:text-[#9CA3AF]'
-                  }`}
-                  style={{ color: isTop ? row.color : undefined }}
-                >
-                  {row.label}
-                </span>
-              </div>
+              <span style={{
+                width: 42,
+                fontSize: 11,
+                fontWeight: isBest ? 700 : 500,
+                color: isBest ? color : (isDark ? '#9CA3AF' : '#6B7280'),
+                textAlign: 'right',
+                flexShrink: 0,
+              }}>
+                {label}
+              </span>
 
-              {/* Bar track */}
-              <div className="flex-1 bg-surface-container-high dark:bg-[#2a2a2a] rounded-full h-[10px] overflow-hidden">
+              {/* Bar container */}
+              <div style={{
+                flex: 1,
+                height: 20,
+                background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                borderRadius: 4,
+                overflow: 'hidden',
+                position: 'relative',
+              }}>
                 <div
-                  className="h-full rounded-full transition-all duration-700 ease-out"
                   style={{
-                    width: `${pct}%`,
-                    backgroundColor: row.color,
-                    opacity: isTop ? 1 : 0.75,
+                    width: `${barWidth}%`,
+                    height: '100%',
+                    background: `${color}${isBest ? '' : '88'}`,
+                    borderRadius: 4,
+                    transition: 'width 0.6s cubic-bezier(0.4,0,0.2,1)',
+                    position: 'relative',
                   }}
-                />
+                >
+                  {isBest && (
+                    <div style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: `linear-gradient(90deg, transparent, ${color}33)`,
+                      animation: 'shimmerBar 2s infinite',
+                    }} />
+                  )}
+                </div>
               </div>
 
               {/* Score */}
-              <div className="w-[42px] flex-shrink-0 text-right">
-                <span className={`text-[12px] font-semibold tabular-nums ${isTop ? '' : 'text-on-surface-variant dark:text-[#9CA3AF]'
-                  }`}
-                  style={{ color: isTop ? row.color : undefined }}
-                >
-                  {(row.rougeL * 100).toFixed(1)}%
-                </span>
-              </div>
+              <span style={{
+                width: 44,
+                fontSize: 12,
+                fontWeight: isBest ? 700 : 500,
+                fontVariantNumeric: 'tabular-nums',
+                color: isBest ? color : (isDark ? '#D1D5DB' : '#374151'),
+                textAlign: 'right',
+                flexShrink: 0,
+              }}>
+                {(metrics.rougeL * 100).toFixed(1)}%
+              </span>
             </div>
           );
         })}
       </div>
 
-      {/* Footer — token overlap legend */}
-      <div className="mt-5 pt-4 border-t border-surface-variant/20 dark:border-[#2a2a2a] flex flex-wrap gap-x-4 gap-y-1">
-        {rows.map(row => (
-          <span key={row.key} className="text-[11px]">
-            <span className="font-semibold" style={{ color: row.color }}>
-              {row.label}
-            </span>
-            <span className="text-on-surface-variant dark:text-[#9CA3AF]">
-              {' '}overlap: {row.overlap}%
-            </span>
+      {/* Word overlap row */}
+      <div style={{
+        marginTop: 12,
+        paddingTop: 10,
+        borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+        display: 'flex',
+        gap: 16,
+        flexWrap: 'wrap',
+      }}>
+        {entries.map(([method, metrics]) => (
+          <span key={method} style={{
+            fontSize: 10,
+            color: isDark ? '#6B7280' : '#9CA3AF',
+          }}>
+            <span style={{ color: METHOD_COLORS[method], fontWeight: 600 }}>{METHOD_LABELS[method]}</span>
+            {' '}overlap: {(metrics.wordOverlap * 100).toFixed(0)}%
           </span>
         ))}
       </div>
+
+      <style>{`@keyframes shimmerBar { 0%,100% { opacity: 0.3; } 50% { opacity: 0.8; } }`}</style>
     </div>
   );
 }
