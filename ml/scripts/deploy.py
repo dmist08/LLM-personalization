@@ -79,6 +79,13 @@ LORA_PROMPT = (
     "{article}\n\nHeadline:"
 )
 
+STEERED_PROMPT = (
+    "Write ONLY a single news headline in the style of {author_name}"
+    "{publication_context} for the following article. Output ONLY the headline "
+    "text, nothing else. No explanation, no quotes, no prefix.\n\n"
+    "{article}\n\nHeadline:"
+)
+
 
 # ── LLM Inference Class ──────────────────────────────────────────────────────
 @app.cls(
@@ -310,6 +317,26 @@ class StyleVectorLLM:
         parts.append("Headline:")
         return "\n".join(parts)
 
+    def _author_name(self, author_id: str) -> str:
+        return self.author_metadata.get(author_id, {}).get(
+            "name", author_id.replace("_", " ").title()
+        )
+
+    def _publication_context(self, publication: str) -> str:
+        publication = (publication or "").strip().upper()
+        labels = {
+            "HT": " from Hindustan Times",
+            "TOI": " from Times of India",
+        }
+        return labels.get(publication, f" from {publication}" if publication else "")
+
+    def _build_steered_prompt(self, article: str, author_id: str, publication: str) -> str:
+        return STEERED_PROMPT.format(
+            author_name=self._author_name(author_id),
+            publication_context=self._publication_context(publication),
+            article=self._prepare_article(article),
+        )
+
     def _generate(self, model, prompt: str, max_tokens: int = MAX_NEW_TOKENS) -> str:
         """Generate text from a model with the given prompt."""
         import torch
@@ -357,7 +384,13 @@ class StyleVectorLLM:
             return model.base_model.model.model.layers
         return model.model.layers
 
-    def _generate_with_steering(self, article: str, author_id: str, use_cold_start: bool = False) -> str:
+    def _generate_with_steering(
+        self,
+        article: str,
+        author_id: str,
+        publication: str = "",
+        use_cold_start: bool = False,
+    ) -> str:
         """Generate with activation steering at layer BEST_LAYER."""
         import torch
         import numpy as np
@@ -373,11 +406,11 @@ class StyleVectorLLM:
                 vec = self.style_vectors[author_id]
             else:
                 # Fallback — no vector available
-                prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
+                prompt = self._build_steered_prompt(article, author_id, publication)
                 return self._generate_base(prompt)
         else:
             if author_id not in self.style_vectors:
-                prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
+                prompt = self._build_steered_prompt(article, author_id, publication)
                 return self._generate_base(prompt)
             vec = self.style_vectors[author_id]
 
@@ -399,7 +432,7 @@ class StyleVectorLLM:
         hook_handle = layer.register_forward_hook(steering_hook)
 
         try:
-            prompt = AGNOSTIC_PROMPT.format(article=self._prepare_article(article))
+            prompt = self._build_steered_prompt(article, author_id, publication)
             if self.lora_model is not None:
                 with self.lora_model.disable_adapter():
                     result = self._generate(self.lora_model, prompt)
@@ -428,20 +461,21 @@ class StyleVectorLLM:
                 headline = self._generate_base(prompt)
 
             elif method == "stylevector":
-                headline = self._generate_with_steering(article, author_id, use_cold_start=False)
+                headline = self._generate_with_steering(
+                    article, author_id, publication, use_cold_start=False
+                )
 
             elif method == "cold_start_sv":
-                headline = self._generate_with_steering(article, author_id, use_cold_start=True)
+                headline = self._generate_with_steering(
+                    article, author_id, publication, use_cold_start=True
+                )
 
             elif method == "lora_finetuned":
                 if self.lora_model is None:
                     headline = "[LoRA model not loaded]"
                 else:
-                    author_name = self.author_metadata.get(author_id, {}).get(
-                        "name", author_id.replace("_", " ").title()
-                    )
                     prompt = LORA_PROMPT.format(
-                        author_name=author_name,
+                        author_name=self._author_name(author_id),
                         article=self._prepare_article(article),
                     )
                     headline = self._generate(self.lora_model, prompt)
