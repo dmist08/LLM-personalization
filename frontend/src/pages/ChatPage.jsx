@@ -59,12 +59,12 @@ export default function ChatPage() {
     try {
       const data = await generateHeadlines({ ...payload, sessionId });
       console.log('[ChatPage] generateHeadlines raw response:', data);
-      console.log('[ChatPage] lora_finetuned result:', data?.results?.lora_finetuned);
+      console.log('[ChatPage] lora result:', data?.results?.lora);  // ← add this
       setMessages(prev =>
         prev.map(m => {
           if (m.id === tempId) {
             const updated = { id: data.session_id, payload, results: data.results, isLoading: false };
-            console.log('[ChatPage] updated msg.results.lora_finetuned:', updated.results?.lora_finetuned);
+            console.log('[ChatPage] updated msg.results.lora:', updated.results?.lora); // ← add
             return updated;
           }
           return m;
@@ -178,8 +178,8 @@ export default function ChatPage() {
                     ) : msg.results ? (
                       <div>
                         {/* Complete banner */}
-                        {console.log('[RENDER] msg.results:', msg.results)}
-                        {console.log('[RENDER] msg.results.lora_finetuned:', msg.results?.lora_finetuned)}
+                        {console.log('[RENDER] msg.results:', msg.results)}         {/* ← add */}
+                        {console.log('[RENDER] msg.results.lora:', msg.results?.lora)} {/* ← add */}
                         <div className="flex items-center gap-2 mb-5 ml-2">
                           <span className="w-2 h-2 rounded-full bg-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
                           <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#10B981]">

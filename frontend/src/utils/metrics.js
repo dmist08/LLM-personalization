@@ -44,18 +44,17 @@ export function computeMetrics(candidate, reference) {
 
   const rougeL = computeRougeL(candidate, reference);
 
-  // Tokenization (mirrors evaluate.py _tokenize)
-  const tokenize = (text) => text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
-  const hyp = tokenize(candidate);
-  const ref = tokenize(reference);
+  // Word overlap (Jaccard-like)
+  const candWords = new Set(candidate.toLowerCase().trim().split(/\s+/));
+  const refWords = new Set(reference.toLowerCase().trim().split(/\s+/));
+  const intersection = [...candWords].filter(w => refWords.has(w)).length;
+  const union = new Set([...candWords, ...refWords]).size;
+  const wordOverlap = union > 0 ? Math.round((intersection / union) * 10000) / 10000 : 0;
 
-  if (ref.length === 0) return { rougeL, overlap: 0 };
+  // Length ratio
+  const candLen = candidate.trim().split(/\s+/).length;
+  const refLen = reference.trim().split(/\s+/).length;
+  const lengthRatio = refLen > 0 ? Math.round((candLen / refLen) * 100) / 100 : 0;
 
-  // Unique tokens for overlap recall
-  const refSet = new Set(ref);
-  const hypSet = new Set(hyp);
-  const common = [...refSet].filter(w => hypSet.has(w)).length;
-  const overlap = Math.round((common / refSet.size) * 1000) / 10; // e.g. 14.5
-
-  return { rougeL, overlap };
+  return { rougeL, wordOverlap, lengthRatio };
 }

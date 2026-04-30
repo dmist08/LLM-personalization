@@ -5,7 +5,7 @@
 
 const METHOD_META = {
   stylevector: { label: 'SV', color: '#22C55E' },  // green
-  lora_finetuned: { label: 'LoRA', color: '#94A3B8' }, // slate
+  lora_finetuned: { label: 'lora_finetuned', color: '#94A3B8' }, // slate
   no_personalization: { label: 'Base', color: '#94A3B8' },  // slate
   rag_bm25: { label: 'RAG', color: '#FBBF24' },  // amber
   cold_start_sv: { label: 'CS-SV', color: '#818CF8' },  // indigo

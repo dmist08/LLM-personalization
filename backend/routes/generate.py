@@ -105,7 +105,6 @@ def generate():
     source_text = (body.get("source_text") or "").strip()
     author_id   = (body.get("author_id")   or "").strip()
     publication = (body.get("publication") or "").strip()
-    ground_truth = (body.get("ground_truth") or "").strip()
     session_id  = body.get("session_id")
     user_id     = body.get("user_id", "anonymous")
 
@@ -150,13 +149,12 @@ def generate():
     now            = time.time()
     new_session_id = session_id or str(uuid.uuid4())
     chat_entry     = {
-        "source_text":  source_text,
-        "author_id":    author_id,
-        "publication":  publication,
-        "ground_truth": ground_truth,
-        "results":      results,
-        "errors":       errors,
-        "created_at":   now,
+        "source_text": source_text,
+        "author_id":   author_id,
+        "publication": publication,
+        "results":     results,
+        "errors":      errors,
+        "created_at":  now,
     }
 
     try:
