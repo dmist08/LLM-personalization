@@ -62,11 +62,20 @@ VECTORS_DIR = "/vectors"
 MINUTES = 60
 RAG_TOP_K = 2
 RAG_MAX_ARTICLE_WORDS = 150
+MAX_ARTICLE_WORDS = 400
+MAX_NEW_TOKENS = 30
 
 # Prompt — MUST match agnostic_gen.py exactly
 AGNOSTIC_PROMPT = (
     "Write ONLY a single neutral, factual news headline for the following article. "
     "Output ONLY the headline text, nothing else. No explanation, no quotes, no prefix.\n\n"
+    "{article}\n\nHeadline:"
+)
+
+LORA_PROMPT = (
+    "Write ONLY a single news headline in the style of {author_name} for the "
+    "following article. Output ONLY the headline text, nothing else. "
+    "No explanation, no quotes, no prefix.\n\n"
     "{article}\n\nHeadline:"
 )
 
@@ -168,6 +177,18 @@ class StyleVectorLLM:
     def _truncate_words(self, text: str, max_words: int = RAG_MAX_ARTICLE_WORDS) -> str:
         words = re.sub(r"\s+", " ", text or "").strip().split()
         return " ".join(words[:max_words])
+
+    def _truncate_to_sentence(self, text: str, max_words: int = MAX_ARTICLE_WORDS) -> str:
+        """Truncate to <= max_words, preferably ending at a sentence boundary."""
+        words = re.sub(r"\s+", " ", text or "").strip().split()
+        if len(words) <= max_words:
+            return " ".join(words)
+
+        truncated = " ".join(words[:max_words])
+        for i in range(len(truncated) - 1, max(0, len(truncated) - 300), -1):
+            if truncated[i] in ".!?":
+                return truncated[: i + 1]
+        return truncated
 
     def _load_rag_indices(self, train_path: str) -> dict:
         """Build per-author BM25 indexes from Indian training records."""
@@ -271,36 +292,40 @@ class StyleVectorLLM:
         parts.append("Headline:")
         return "\n".join(parts)
 
-    def _generate(self, model, prompt: str, max_tokens: int = 60) -> str:
+    def _generate(self, model, prompt: str, max_tokens: int = MAX_NEW_TOKENS) -> str:
         """Generate text from a model with the given prompt."""
         import torch
 
+        chat_prompt = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=700
+            chat_prompt, return_tensors="pt", truncation=True, max_length=768
         ).to(self.device)
+        prompt_len = inputs["input_ids"].shape[1]
 
         with torch.no_grad():
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=max_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
+                do_sample=False,
+                temperature=1.0,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 
         # Decode only new tokens
-        new_tokens = output_ids[0, inputs["input_ids"].shape[1]:]
+        new_tokens = output_ids[0, prompt_len:]
         text = self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
         # Clean trailing garbage
-        for stop in ["\n", " Category:", " Source", " #", "  "]:
-            idx = text.find(stop)
-            if idx > 5:
-                text = text[:idx]
+        for stop in ["\n", "Article:", "Generate", "Write", " Category:", " Source", " #", "  "]:
+            if stop in text:
+                text = text.split(stop)[0].strip()
         return text.strip().strip('"\'')
 
-    def _generate_base(self, prompt: str, max_tokens: int = 60) -> str:
+    def _generate_base(self, prompt: str, max_tokens: int = MAX_NEW_TOKENS) -> str:
         """Generate from the base model with PEFT adapters explicitly disabled."""
         if self.lora_model is not None:
             with self.lora_model.disable_adapter():
@@ -330,11 +355,11 @@ class StyleVectorLLM:
                 vec = self.style_vectors[author_id]
             else:
                 # Fallback — no vector available
-                prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
+                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
                 return self._generate_base(prompt)
         else:
             if author_id not in self.style_vectors:
-                prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
+                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
                 return self._generate_base(prompt)
             vec = self.style_vectors[author_id]
 
@@ -356,7 +381,7 @@ class StyleVectorLLM:
         hook_handle = layer.register_forward_hook(steering_hook)
 
         try:
-            prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
+            prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
             if self.lora_model is not None:
                 with self.lora_model.disable_adapter():
                     result = self._generate(self.lora_model, prompt)
@@ -377,7 +402,7 @@ class StyleVectorLLM:
 
         try:
             if method == "no_personalization":
-                prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
+                prompt = AGNOSTIC_PROMPT.format(article=self._truncate_to_sentence(article))
                 headline = self._generate_base(prompt)
 
             elif method == "rag_bm25":
@@ -394,9 +419,12 @@ class StyleVectorLLM:
                 if self.lora_model is None:
                     headline = "[LoRA model not loaded]"
                 else:
-                    prompt = (
-                        f"Write a news headline in the style of {author_id}:\n\n"
-                        f"Article: {article[:2000]}\n\nHeadline:"
+                    author_name = self.author_metadata.get(author_id, {}).get(
+                        "name", author_id.replace("_", " ").title()
+                    )
+                    prompt = LORA_PROMPT.format(
+                        author_name=author_name,
+                        article=self._truncate_to_sentence(article),
                     )
                     headline = self._generate(self.lora_model, prompt)
             else:
