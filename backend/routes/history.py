@@ -55,6 +55,7 @@ def get_session(session_id):
                 "publication":      m["publication"],
                 "authorId":         m["author_id"],
                 "authorName":       doc.get("author_name", m["author_id"]),
+                "groundTruth":      m.get("ground_truth"),
             },
             "results":    m["results"],
             "isLoading":  False,
