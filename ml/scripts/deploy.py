@@ -14,12 +14,19 @@ Test:     modal run deploy.py
 Logs:     modal app logs stylevector-llm
 """
 
-import modal
 import json
+import math
+import re
 from pathlib import Path
+
+import modal
 
 # ── App + Image ───────────────────────────────────────────────────────────────
 app = modal.App("stylevector-llm")
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TRAIN_JSONL = PROJECT_ROOT / "data" / "splits" / "indian_train.jsonl"
+REMOTE_RAG_TRAIN = "/app/indian_train.jsonl"
 
 llm_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -35,6 +42,7 @@ llm_image = (
         "protobuf>=4.25",
     )
     .env({"HF_HOME": "/root/.cache/huggingface"})
+    .add_local_file(str(TRAIN_JSONL), remote_path=REMOTE_RAG_TRAIN)
 )
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
@@ -52,6 +60,8 @@ BEST_ALPHA = 0.6       # Steering strength for StyleVector
 CS_ALPHA = 0.6         # Cold-start interpolation alpha (from fit)
 VECTORS_DIR = "/vectors"
 MINUTES = 60
+RAG_TOP_K = 2
+RAG_MAX_ARTICLE_WORDS = 150
 
 # Prompt — MUST match agnostic_gen.py exactly
 AGNOSTIC_PROMPT = (
@@ -145,9 +155,121 @@ class StyleVectorLLM:
                 self.author_metadata = json.load(f)
             print(f"[STARTUP] Loaded metadata for {len(self.author_metadata)} authors")
 
+        self.rag_indices = self._load_rag_indices(REMOTE_RAG_TRAIN)
+
         # Commit volume cache after HF downloads
         hf_cache_vol.commit()
         print("[STARTUP] Ready to serve requests!")
+
+    def _tokenize(self, text: str) -> list[str]:
+        """Tokenize for BM25 retrieval."""
+        return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+    def _truncate_words(self, text: str, max_words: int = RAG_MAX_ARTICLE_WORDS) -> str:
+        words = re.sub(r"\s+", " ", text or "").strip().split()
+        return " ".join(words[:max_words])
+
+    def _load_rag_indices(self, train_path: str) -> dict:
+        """Build per-author BM25 indexes from Indian training records."""
+        by_author = {}
+        path = Path(train_path)
+        if not path.exists():
+            print(f"[STARTUP WARN] RAG train file not found: {train_path}")
+            return {}
+
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                author_id = str(rec.get("author_id", "")).strip()
+                article = rec.get("article_body") or rec.get("article_text") or ""
+                headline = rec.get("headline") or ""
+                if author_id and article and headline:
+                    by_author.setdefault(author_id, []).append({
+                        "article": article,
+                        "headline": headline,
+                    })
+
+        indices = {}
+        for author_id, records in by_author.items():
+            tokenized = [self._tokenize(r["article"]) for r in records]
+            doc_freq = {}
+            for tokens in tokenized:
+                for tok in set(tokens):
+                    doc_freq[tok] = doc_freq.get(tok, 0) + 1
+
+            n_docs = len(records)
+            avgdl = sum(len(toks) for toks in tokenized) / max(n_docs, 1)
+            idf = {
+                tok: math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
+                for tok, df in doc_freq.items()
+            }
+            indices[author_id] = {
+                "records": records,
+                "tokenized": tokenized,
+                "idf": idf,
+                "avgdl": avgdl,
+            }
+
+        print(f"[STARTUP] Built RAG BM25 indexes for {len(indices)} authors")
+        return indices
+
+    def _bm25_retrieve(self, author_id: str, query: str, k: int = RAG_TOP_K) -> list[dict]:
+        """Retrieve top-k same-author training examples by BM25 score."""
+        index = self.rag_indices.get(author_id)
+        if not index:
+            return []
+
+        query_terms = self._tokenize(query)
+        if not query_terms:
+            return []
+
+        k1 = 1.5
+        b = 0.75
+        q_terms = set(query_terms)
+        scores = []
+        avgdl = index["avgdl"] or 1.0
+
+        for doc_idx, tokens in enumerate(index["tokenized"]):
+            if not tokens:
+                scores.append((0.0, doc_idx))
+                continue
+            freqs = {}
+            for tok in tokens:
+                if tok in q_terms:
+                    freqs[tok] = freqs.get(tok, 0) + 1
+
+            dl = len(tokens)
+            score = 0.0
+            for tok, tf in freqs.items():
+                idf = index["idf"].get(tok, 0.0)
+                denom = tf + k1 * (1 - b + b * dl / avgdl)
+                score += idf * (tf * (k1 + 1)) / denom
+            scores.append((score, doc_idx))
+
+        top = sorted(scores, key=lambda x: x[0], reverse=True)[:k]
+        return [index["records"][idx] for score, idx in top if score > 0]
+
+    def _build_rag_prompt(self, article: str, author_id: str) -> str:
+        """Build the same-author BM25 RAG prompt used by the offline baseline."""
+        examples = self._bm25_retrieve(author_id, article, k=RAG_TOP_K)
+        if not examples:
+            article_short = self._truncate_words(article)
+            return (
+                "Write a concise news headline for the following article:\n\n"
+                f"{article_short}\n\nHeadline:"
+            )
+
+        parts = ["Here are past headlines written by this journalist:\n"]
+        for ex in examples:
+            parts.append(f"Article: {self._truncate_words(ex['article'])}")
+            parts.append(f"Headline: {ex['headline']}\n")
+
+        parts.append("Now write a headline for the following article:")
+        parts.append(f"Article: {self._truncate_words(article)}\n")
+        parts.append("Headline:")
+        return "\n".join(parts)
 
     def _generate(self, model, prompt: str, max_tokens: int = 60) -> str:
         """Generate text from a model with the given prompt."""
@@ -178,6 +300,20 @@ class StyleVectorLLM:
                 text = text[:idx]
         return text.strip().strip('"\'')
 
+    def _generate_base(self, prompt: str, max_tokens: int = 60) -> str:
+        """Generate from the base model with PEFT adapters explicitly disabled."""
+        if self.lora_model is not None:
+            with self.lora_model.disable_adapter():
+                return self._generate(self.lora_model, prompt, max_tokens=max_tokens)
+        return self._generate(self.base_model, prompt, max_tokens=max_tokens)
+
+    def _target_layers(self):
+        """Return transformer layers for the loaded model, accounting for PEFT wrapping."""
+        model = self.lora_model if self.lora_model is not None else self.base_model
+        if self.lora_model is not None:
+            return model.base_model.model.model.layers
+        return model.model.layers
+
     def _generate_with_steering(self, article: str, author_id: str, use_cold_start: bool = False) -> str:
         """Generate with activation steering at layer BEST_LAYER."""
         import torch
@@ -195,11 +331,11 @@ class StyleVectorLLM:
             else:
                 # Fallback — no vector available
                 prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
-                return self._generate(self.base_model, prompt)
+                return self._generate_base(prompt)
         else:
             if author_id not in self.style_vectors:
                 prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
-                return self._generate(self.base_model, prompt)
+                return self._generate_base(prompt)
             vec = self.style_vectors[author_id]
 
         # Convert to tensor
@@ -216,12 +352,16 @@ class StyleVectorLLM:
             return tuple(modified)
 
         # Hook into the correct layer
-        layer = self.base_model.model.layers[BEST_LAYER]
+        layer = self._target_layers()[BEST_LAYER]
         hook_handle = layer.register_forward_hook(steering_hook)
 
         try:
             prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
-            result = self._generate(self.base_model, prompt)
+            if self.lora_model is not None:
+                with self.lora_model.disable_adapter():
+                    result = self._generate(self.lora_model, prompt)
+            else:
+                result = self._generate(self.base_model, prompt)
         finally:
             if hook_handle:
                 hook_handle.remove()
@@ -238,16 +378,11 @@ class StyleVectorLLM:
         try:
             if method == "no_personalization":
                 prompt = AGNOSTIC_PROMPT.format(article=article[:2000])
-                headline = self._generate(self.base_model, prompt)
+                headline = self._generate_base(prompt)
 
             elif method == "rag_bm25":
-                # RAG-style: add author context to prompt
-                prompt = (
-                    f"Write a news headline in the style of {author_id} "
-                    f"from {publication}.\n\n"
-                    f"Article: {article[:2000]}\n\nHeadline:"
-                )
-                headline = self._generate(self.base_model, prompt)
+                prompt = self._build_rag_prompt(article, author_id)
+                headline = self._generate_base(prompt)
 
             elif method == "stylevector":
                 headline = self._generate_with_steering(article, author_id, use_cold_start=False)

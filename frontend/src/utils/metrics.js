@@ -1,7 +1,16 @@
 /**
  * computeRougeL — Compute ROUGE-L F1 score between candidate and reference strings.
- * Pure JS implementation (no dependencies). Works on word-level tokens.
+ * Pure JS implementation using word-level tokenization close to rouge-score defaults:
+ * lowercase, strip punctuation, split into alphanumeric tokens.
  */
+
+function tokenize(text) {
+  if (!text) return [];
+  return text
+    .toLowerCase()
+    .replace(/[''"]/g, '')
+    .match(/[a-z0-9]+/g) || [];
+}
 
 function lcsLength(a, b) {
   const m = a.length, n = b.length;
@@ -20,8 +29,8 @@ function lcsLength(a, b) {
 
 export function computeRougeL(candidate, reference) {
   if (!candidate || !reference) return null;
-  const candTokens = candidate.toLowerCase().trim().split(/\s+/);
-  const refTokens = reference.toLowerCase().trim().split(/\s+/);
+  const candTokens = tokenize(candidate);
+  const refTokens = tokenize(reference);
 
   if (candTokens.length === 0 || refTokens.length === 0) return null;
 
@@ -45,16 +54,16 @@ export function computeMetrics(candidate, reference) {
   const rougeL = computeRougeL(candidate, reference);
 
   // Word overlap (Jaccard-like)
-  const candWords = new Set(candidate.toLowerCase().trim().split(/\s+/));
-  const refWords = new Set(reference.toLowerCase().trim().split(/\s+/));
+  const candWords = new Set(tokenize(candidate));
+  const refWords = new Set(tokenize(reference));
   const intersection = [...candWords].filter(w => refWords.has(w)).length;
   const union = new Set([...candWords, ...refWords]).size;
   const wordOverlap = union > 0 ? Math.round((intersection / union) * 10000) / 10000 : 0;
 
   // Length ratio
-  const candLen = candidate.trim().split(/\s+/).length;
-  const refLen = reference.trim().split(/\s+/).length;
+  const candLen = tokenize(candidate).length;
+  const refLen = tokenize(reference).length;
   const lengthRatio = refLen > 0 ? Math.round((candLen / refLen) * 100) / 100 : 0;
 
-  return { rougeL, wordOverlap, lengthRatio };
+  return { rougeL, wordOverlap, overlap: Math.round(wordOverlap * 1000) / 10, lengthRatio };
 }
