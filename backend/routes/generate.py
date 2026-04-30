@@ -120,7 +120,7 @@ def generate():
     # ── Fix 2: Warm up container before firing 4 parallel calls ──
     _warmup_container()
 
-    METHODS = ["no_personalization", "rag_bm25", "stylevector", "cold_start_sv"]
+    METHODS = ["no_personalization", "rag_bm25", "stylevector", "cold_start_sv", "lora_finetuned"]
     results, errors = {}, []
 
     def _call(method):

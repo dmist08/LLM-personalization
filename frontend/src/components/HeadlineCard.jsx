@@ -1,6 +1,14 @@
 import { useState } from 'react';
 
 const CARD_CONFIG = {
+  ground_truth: {
+    label: 'GROUND TRUTH',
+    badge: '✓ Reference',
+    accent: false,
+    featured: false,
+    fullWidth: true,
+    description: 'Original headline provided as the reference for ROUGE-L scoring.',
+  },
   no_personalization: {
     label: 'NO PERSONALIZATION',
     badge: null,
@@ -29,24 +37,30 @@ const CARD_CONFIG = {
     featured: true,
     description: 'Our novel Cold-Start approach with activation steering — no prior author data needed.',
   },
+  lora: {
+    label: 'LoRA FINE-TUNED (OURS)',
+    badge: '★ Best',
+    accent: true,
+    featured: true,
+    fullWidth: true,
+    description: 'Low-Rank Adaptation fine-tuned on journalist writing style — highest personalization fidelity.',
+  },
 };
 
 function SkeletonCard({ config }) {
   return (
-    <div className={`bg-surface-container-lowest dark:bg-[#1C1C1C] rounded-[8px] p-5 border relative overflow-hidden ${
-      config.featured
+    <div className={`bg-surface-container-lowest dark:bg-[#1C1C1C] rounded-[8px] p-5 border relative overflow-hidden ${config.featured
         ? 'border-[#2563EB]/30 shadow-[0_4px_16px_rgba(37,99,235,0.12)]'
         : 'border-surface-variant/30 dark:border-[#2a2a2a]'
-    }`}>
+      }`}>
       {config.featured && (
         <div className="absolute inset-0 bg-primary/5 dark:bg-[#1E3A5F]/20" />
       )}
       <div className="flex justify-between items-center mb-3 relative z-10">
-        <span className={`text-[10px] font-bold tracking-[0.08em] uppercase ${
-          config.featured || config.accent
+        <span className={`text-[10px] font-bold tracking-[0.08em] uppercase ${config.featured || config.accent
             ? 'text-primary dark:text-[#3B82F6]'
             : 'text-on-surface-variant dark:text-[#9CA3AF]'
-        }`}>
+          }`}>
           {config.label}
         </span>
         {config.featured && (
@@ -69,15 +83,90 @@ export default function HeadlineCard({ type, headline, rougeL, latencyMs, isLoad
   const config = CARD_CONFIG[type] || CARD_CONFIG.no_personalization;
   const [showTooltip, setShowTooltip] = useState(false);
 
+  const isGroundTruth = type === 'ground_truth';
+  const isLora = type === 'lora';
+
   if (isLoading) return <SkeletonCard config={config} />;
+
+  // Ground truth card — neutral dashed style
+  if (isGroundTruth) {
+    return (
+      <div className="bg-surface-container/30 dark:bg-[#161616] rounded-[8px] p-5 border border-dashed border-outline-variant/40 dark:border-[#333]">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold tracking-[0.08em] uppercase text-on-surface-variant dark:text-[#9CA3AF]">
+              {config.label}
+            </span>
+            <span className="px-1.5 py-0.5 rounded-sm bg-surface-container-high dark:bg-[#2a2a2a] text-on-surface-variant dark:text-[#9CA3AF] text-[9px] font-bold uppercase tracking-wider">
+              {config.badge}
+            </span>
+          </div>
+          <button
+            onClick={() => onCopy(headline)}
+            className="text-outline hover:text-on-surface dark:hover:text-[#F8F9FF] transition-colors"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+              {isCopied ? 'check' : 'content_copy'}
+            </span>
+          </button>
+        </div>
+        <h3 className="text-[17px] font-medium tracking-[-0.02em] leading-snug text-[#111111] dark:text-[#F8F9FF]">
+          {headline}
+        </h3>
+        <p className="text-[11px] text-on-surface-variant dark:text-[#9CA3AF] mt-3">{config.description}</p>
+      </div>
+    );
+  }
+
+  // LoRA card — premium highlighted style
+  if (isLora) {
+    return (
+      <div className="relative overflow-hidden bg-gradient-to-r from-[#004AC6]/5 to-[#7C3AED]/5 dark:from-[#1E3A5F]/40 dark:to-[#2D1B69]/40 rounded-[8px] p-5 border border-[#7C3AED]/20 dark:border-[#7C3AED]/30 shadow-[0_4px_16px_rgba(124,58,237,0.08)]">
+        <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-[#004AC6] to-[#7C3AED]" />
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold tracking-[0.08em] uppercase text-[#7C3AED] dark:text-[#A78BFA]">
+              {config.label}
+            </span>
+            <span className="px-1.5 py-0.5 rounded-sm bg-[#7C3AED]/10 dark:bg-[#2D1B69] text-[#7C3AED] dark:text-[#A78BFA] text-[9px] font-bold uppercase tracking-wider">
+              {config.badge}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {rougeL !== undefined && (
+              <span className="text-[11px] text-[#7C3AED] dark:text-[#A78BFA] font-bold uppercase tracking-widest">
+                ROUGE-L {rougeL}
+              </span>
+            )}
+            {latencyMs !== undefined && (
+              <span className="text-[10px] text-outline px-1.5 py-0.5 bg-surface-container-high dark:bg-[#2a2a2a] rounded">
+                {(latencyMs / 1000).toFixed(1)}s
+              </span>
+            )}
+            <button
+              onClick={() => onCopy(headline)}
+              className="text-outline hover:text-on-surface dark:hover:text-[#F8F9FF] transition-colors"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                {isCopied ? 'check' : 'content_copy'}
+              </span>
+            </button>
+          </div>
+        </div>
+        <h3 className="text-[18px] font-semibold tracking-[-0.02em] leading-snug text-[#111111] dark:text-[#F8F9FF]">
+          {headline}
+        </h3>
+        <p className="text-[11px] text-on-surface-variant dark:text-[#9CA3AF] mt-3">{config.description}</p>
+      </div>
+    );
+  }
 
   return (
     <div
-      className={`bg-surface-container-lowest dark:bg-[#1C1C1C] rounded-[8px] p-5 relative overflow-hidden transition-shadow hover:shadow-[0_12px_32px_rgba(21,28,37,0.06)] dark:hover:shadow-[0_12px_32px_rgba(0,0,0,0.4)] ${
-        config.featured
+      className={`bg-surface-container-lowest dark:bg-[#1C1C1C] rounded-[8px] p-5 relative overflow-hidden transition-shadow hover:shadow-[0_12px_32px_rgba(21,28,37,0.06)] dark:hover:shadow-[0_12px_32px_rgba(0,0,0,0.4)] ${config.featured
           ? 'border border-[#2563EB]/30 shadow-[0_4px_16px_rgba(37,99,235,0.12)] border-l-[3px] border-l-primary'
           : 'border border-surface-variant/30 dark:border-[#2a2a2a] shadow-[0_2px_8px_rgba(21,28,37,0.04)]'
-      }`}
+        }`}
     >
       {config.featured && (
         <div className="absolute inset-0 bg-primary/5 dark:bg-[#1E3A5F]/20 pointer-events-none" />
@@ -86,11 +175,10 @@ export default function HeadlineCard({ type, headline, rougeL, latencyMs, isLoad
       {/* Card Header */}
       <div className="flex justify-between items-center mb-3 relative z-10">
         <div className="flex items-center gap-2">
-          <span className={`text-[10px] font-bold tracking-[0.08em] uppercase ${
-            config.featured || config.accent
+          <span className={`text-[10px] font-bold tracking-[0.08em] uppercase ${config.featured || config.accent
               ? 'text-primary dark:text-[#3B82F6]'
               : 'text-on-surface-variant dark:text-[#9CA3AF]'
-          }`}>
+            }`}>
             {config.label}
           </span>
           {config.badge && (
@@ -101,12 +189,10 @@ export default function HeadlineCard({ type, headline, rougeL, latencyMs, isLoad
         </div>
 
         <div className="flex items-center gap-2">
-          {/* ROUGE-L score */}
-          {rougeL != null && (
-            <span className={`text-[11px] font-bold uppercase tracking-widest ${
-              rougeL >= 0.3 ? 'text-[#10B981]' : rougeL >= 0.15 ? 'text-[#F59E0B]' : 'text-[#9CA3AF]'
-            }`}>
-              R-L {(rougeL * 100).toFixed(1)}%
+          {/* ROUGE-L score (only for cold_start_sv) */}
+          {rougeL !== undefined && (
+            <span className="text-[11px] text-[#2563EB] dark:text-[#3B82F6] font-bold uppercase tracking-widest">
+              ROUGE-L {rougeL}
             </span>
           )}
           {/* Latency */}
@@ -137,11 +223,10 @@ export default function HeadlineCard({ type, headline, rougeL, latencyMs, isLoad
       </div>
 
       {/* Headline Text */}
-      <h3 className={`text-[17px] tracking-[-0.02em] leading-snug relative z-10 ${
-        config.featured
+      <h3 className={`text-[17px] tracking-[-0.02em] leading-snug relative z-10 ${config.featured
           ? 'font-semibold text-[#111111] dark:text-[#F8F9FF]'
           : 'font-medium text-[#111111] dark:text-[#F8F9FF]'
-      }`}>
+        }`}>
         {headline}
       </h3>
 

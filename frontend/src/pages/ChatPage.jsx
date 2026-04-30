@@ -28,7 +28,6 @@ export default function ChatPage() {
   const sidebarW = sidebarCollapsed ? 64 : 260;
   const hasMessages = messages.length > 0;
 
-  // Load session from route state (fresh generation) or from API (history visit)
   useEffect(() => {
     if (location.state?.results) {
       const { results, payload } = location.state;
@@ -41,9 +40,7 @@ export default function ChatPage() {
       window.history.replaceState({}, '');
     } else if (sessionId) {
       getChatSession(sessionId)
-        .then(session => {
-          setMessages(session.messages || []);
-        })
+        .then(session => setMessages(session.messages || []))
         .catch(() => navigate('/'));
     }
   }, [sessionId]);
@@ -56,26 +53,19 @@ export default function ChatPage() {
     setIsGenerating(true);
     setError(null);
     const tempId = 'pending_' + Date.now();
-    setMessages(prev => [...prev, {
-      id: tempId,
-      payload,
-      results: null,
-      isLoading: true,
-    }]);
+    setMessages(prev => [...prev, { id: tempId, payload, results: null, isLoading: true }]);
 
     try {
       const data = await generateHeadlines({ ...payload, sessionId });
       console.log('[ChatPage] generateHeadlines raw response:', data);
-      console.log('[ChatPage] data.results:', data?.results);
-      setMessages(prev => {
-        const updated = prev.map(m =>
+      console.log('[ChatPage] lora result:', data?.results?.lora);  // ← add this
+      setMessages(prev =>
+        prev.map(m =>
           m.id === tempId
             ? { id: data.session_id, payload, results: data.results, isLoading: false }
             : m
-        );
-        console.log('[ChatPage] updated messages:', updated);
-        return updated;
-      });
+        )
+      );
     } catch (err) {
       setError(err.response?.data?.error || 'Generation failed. Please try again.');
       setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -96,15 +86,10 @@ export default function ChatPage() {
 
         <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} />
 
-        {/* Main content — shifts with sidebar */}
         <main
-          style={{
-            marginLeft: sidebarW,
-            transition: 'margin-left 0.25s cubic-bezier(0.4,0,0.2,1)',
-          }}
+          style={{ marginLeft: sidebarW, transition: 'margin-left 0.25s cubic-bezier(0.4,0,0.2,1)' }}
           className="flex-1 h-screen flex flex-col bg-surface dark:bg-[#0F0F0F] overflow-hidden"
         >
-
           {/* Top header */}
           <header className="h-16 items-center justify-between px-8 bg-surface/80 dark:bg-[#0F0F0F]/80 backdrop-blur-md sticky top-0 z-30 hidden md:flex border-b border-outline-variant/10">
             <h1 className="text-[17px] font-medium tracking-[-0.02em] text-on-surface dark:text-[#F8F9FF]">
@@ -119,49 +104,38 @@ export default function ChatPage() {
             </div>
           </header>
 
-          {/* ── No-message state: center the InputBar ── */}
+          {/* ── Empty state ── */}
           {!hasMessages ? (
             <div className="flex-1 flex flex-col items-center justify-center px-4">
-              {/* Hero text */}
               <div className="mb-10 text-center select-none">
-                <span
-                  className="material-symbols-outlined text-primary dark:text-[#3B82F6] mb-4 block"
-                  style={{ fontSize: 48 }}
-                >
+                <span className="material-symbols-outlined text-primary dark:text-[#3B82F6] mb-4 block" style={{ fontSize: 48 }}>
                   layers
                 </span>
                 <h2 className="text-[26px] font-semibold tracking-[-0.03em] text-on-surface dark:text-[#F8F9FF] mb-2">
                   Cold-Start StyleVector
                 </h2>
                 <p className="text-[14px] text-outline max-w-sm leading-relaxed">
-                  Select a journalist and source publication to initialize the style
-                  steering model. Or begin with a raw text block.
+                  Select a journalist and source publication to initialize the style steering model.
                 </p>
-                {/* Feature pills */}
                 <div className="flex items-center justify-center gap-2 mt-6 flex-wrap">
                   {['✦ Activation Steering', '✦ Cold-Start Clustering', '✦ 42 Indian Journalists'].map(t => (
-                    <span
-                      key={t}
-                      className="px-3 py-1 rounded-full border border-outline-variant/30 text-[12px] text-outline-variant dark:text-slate-400 bg-surface-container/50 dark:bg-[#1C1C1C]/50"
-                    >
+                    <span key={t} className="px-3 py-1 rounded-full border border-outline-variant/30 text-[12px] text-outline-variant dark:text-slate-400 bg-surface-container/50 dark:bg-[#1C1C1C]/50">
                       {t}
                     </span>
                   ))}
                 </div>
               </div>
-
-              {/* Floating InputBar centered */}
               <div className="w-full" style={{ maxWidth: 870 }}>
                 <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
               </div>
             </div>
           ) : (
-            /* ── Has messages: scroll area + pinned InputBar ── */
             <>
-              <div className="flex-1 overflow-y-auto px-4 md:px-8 py-8 pb-8 no-scrollbar max-w-[900px] mx-auto w-full">
+              <div className="flex-1 overflow-y-auto px-4 md:px-8 py-8 pb-8 no-scrollbar max-w-[960px] mx-auto w-full">
 
                 {messages.map((msg) => (
                   <div key={msg.id} className="mb-12">
+
                     {/* User prompt bubble */}
                     <div className="flex flex-col items-end mb-8">
                       <div className="flex items-center gap-2 mb-2 mr-1">
@@ -176,7 +150,7 @@ export default function ChatPage() {
                       </div>
                     </div>
 
-                    {/* Loading / Results */}
+                    {/* ── Loading skeleton ── */}
                     {msg.isLoading ? (
                       <div>
                         <div className="flex items-center gap-3 mb-6 ml-2">
@@ -187,38 +161,50 @@ export default function ChatPage() {
                             Generating Headlines
                           </span>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {RESULT_TYPES.map(type => (
-                            <HeadlineCard key={type} type={type} isLoading={true} />
-                          ))}
+                        <div className="grid grid-cols-2 gap-4">
+                          {msg.payload?.groundTruth && (
+                            <div className="col-span-2"><HeadlineCard type="ground_truth" isLoading={true} /></div>
+                          )}
+                          {RESULT_TYPES.map(type => <HeadlineCard key={type} type={type} isLoading={true} />)}
+                          <div className="col-span-2"><HeadlineCard type="lora" isLoading={true} /></div>
                         </div>
                       </div>
+
                     ) : msg.results ? (
                       <div>
-                        <div className="flex items-center gap-2 mb-6 ml-2">
+                        {/* Complete banner */}
+                        <div className="flex items-center gap-2 mb-5 ml-2">
                           <span className="w-2 h-2 rounded-full bg-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
                           <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#10B981]">
                             Generation Complete
                           </span>
                         </div>
 
-                        {/* Ground truth reference */}
-                        {msg.payload?.groundTruth && (
-                          <div className="mb-4 px-4 py-3 rounded-lg border border-dashed border-outline-variant/30 dark:border-[#2a2a2a] bg-surface-container/30 dark:bg-[#161616]">
-                            <div className="text-[10px] font-bold tracking-[0.08em] uppercase text-outline mb-1">
-                              GROUND TRUTH
-                            </div>
-                            <p className="text-[14px] font-medium text-on-surface dark:text-[#F8F9FF]">
-                              {msg.payload.groundTruth}
-                            </p>
-                          </div>
-                        )}
+                        {/*
+                          ┌──────────────────────────────┐  ← Row 1: Ground Truth (if provided)
+                          ├──────────────┬───────────────┤  ← Row 2: no_persona | rag_bm25
+                          ├──────────────┼───────────────┤  ← Row 3: stylevector | cold_start_sv
+                          └──────────────────────────────┘  ← Row 4: LoRA (always)
+                        */}
+                        <div className="grid grid-cols-2 gap-4">
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Row 1 — Ground Truth (conditional) */}
+                          {msg.payload?.groundTruth && (
+                            <div className="col-span-2">
+                              <HeadlineCard
+                                type="ground_truth"
+                                headline={msg.payload.groundTruth}
+                                isLoading={false}
+                                isCopied={copiedId === `${msg.id}-ground_truth`}
+                                onCopy={(text) => handleCopy(text, `${msg.id}-ground_truth`)}
+                              />
+                            </div>
+                          )}
+
+                          {/* Rows 2 & 3 — 4 method cards */}
                           {RESULT_TYPES.map(type => {
                             const result = msg.results[type];
                             const copyKey = `${msg.id}-${type}`;
-                            // Compute metrics if ground truth provided
                             const metrics = msg.payload?.groundTruth
                               ? computeMetrics(result?.headline, msg.payload.groundTruth)
                               : null;
@@ -235,15 +221,35 @@ export default function ChatPage() {
                               />
                             );
                           })}
+
+                          {/* Row 4 — LoRA (always shown) */}
+                          <div className="col-span-2">
+                            <HeadlineCard
+                              type="lora"
+                              headline={msg.results?.lora?.headline || 'Unavailable'}
+                              rougeL={
+                                msg.payload?.groundTruth && msg.results?.lora?.headline
+                                  ? computeMetrics(msg.results.lora.headline, msg.payload.groundTruth)?.rougeL
+                                  : undefined
+                              }
+                              latencyMs={msg.results?.lora?.latency_ms}
+                              isLoading={false}
+                              isCopied={copiedId === `${msg.id}-lora`}
+                              onCopy={(text) => handleCopy(text, `${msg.id}-lora`)}
+                            />
+                          </div>
+
                         </div>
 
-                        {/* Metrics comparison chart */}
+                        {/* Metrics chart — includes lora now */}
                         {msg.payload?.groundTruth && (() => {
                           const metricsMap = {};
-                          RESULT_TYPES.forEach(type => {
-                            const result = msg.results[type];
-                            if (result?.headline) {
-                              metricsMap[type] = computeMetrics(result.headline, msg.payload.groundTruth);
+                          [...RESULT_TYPES, 'lora'].forEach(type => {
+                            const headline = type === 'lora'
+                              ? msg.results?.lora?.headline
+                              : msg.results[type]?.headline;
+                            if (headline) {
+                              metricsMap[type] = computeMetrics(headline, msg.payload.groundTruth);
                             }
                           });
                           return <MetricsChart metricsMap={metricsMap} />;
@@ -262,8 +268,8 @@ export default function ChatPage() {
                 <div ref={bottomRef} />
               </div>
 
-              {/* Pinned InputBar — flex-shrink-0, no overlap */}
-              <div className="flex-shrink-0 w-full mx-auto" style={{ maxWidth: 870, padding: '0 16px' }}>
+              {/* Pinned InputBar */}
+              <div className="flex-shrink-0 w-full mx-auto" style={{ maxWidth: 870, padding: '0 16px 16px' }}>
                 <InputBar onGenerate={handleGenerate} isGenerating={isGenerating} />
               </div>
             </>
