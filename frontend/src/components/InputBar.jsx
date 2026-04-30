@@ -1,14 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getAuthors } from '../services/api';
+import { useTheme } from '../context/ThemeContext';
+import CustomSelect from './CustomSelect';
 
 const PUBLICATIONS = [
   { code: 'TOI', label: 'The Times of India' },
-  { code: 'HINDU', label: 'The Hindu' },
-  { code: 'IE', label: 'Indian Express' },
   { code: 'HT', label: 'Hindustan Times' },
-  { code: 'MINT', label: 'Mint' },
-  { code: 'NDTV', label: 'NDTV' },
-  { code: 'WIRE', label: 'The Wire' },
 ];
 
 const MAX_WORDS = 500;
@@ -19,10 +16,13 @@ const MAX_HEIGHT = 260;   // px — cap before scroll kicks in
 const countWords = (text) => text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
 
 export default function InputBar({ onGenerate, isGenerating }) {
+  const { isDark } = useTheme();
   const [publication, setPublication] = useState('');
   const [authors, setAuthors] = useState([]);
   const [authorId, setAuthorId] = useState('');
   const [sourceText, setSourceText] = useState('');
+  const [groundTruth, setGroundTruth] = useState('');
+  const [showGroundTruth, setShowGroundTruth] = useState(false);
   const [loadingAuthors, setLoadingAuthors] = useState(false);
 
   const textareaRef = useRef(null);
@@ -72,8 +72,13 @@ export default function InputBar({ onGenerate, isGenerating }) {
       publicationLabel: pub?.label || publication,
       authorId,
       authorName: author?.name || authorId,
+      groundTruth: groundTruth.trim() || null,
     });
   };
+
+  /* ── Build options for CustomSelect ───────────────────── */
+  const pubOptions = PUBLICATIONS.map(p => ({ value: p.code, label: p.label }));
+  const authorOptions = authors.map(a => ({ value: a.id, label: a.name }));
 
   /* ── Styles (inline so no Tailwind conflicts) ────────── */
   const wrapperStyle = {
@@ -88,7 +93,7 @@ export default function InputBar({ onGenerate, isGenerating }) {
     border: '1px solid rgba(127,127,127,0.15)',
     boxShadow: '0 8px 32px rgba(0,0,0,0.10)',
     background: 'transparent',
-    overflow: 'hidden',
+    overflow: 'visible',  // allow dropdown to overflow
   };
 
   return (
@@ -177,6 +182,45 @@ export default function InputBar({ onGenerate, isGenerating }) {
         {/* ── Divider ──────────────────────────────────────── */}
         <div style={{ height: 1, background: 'rgba(127,127,127,0.10)', margin: '0 12px' }} />
 
+        {/* ── Ground Truth Toggle + Input ───────────────────── */}
+        <div style={{ padding: '6px 12px 0' }}>
+          <button
+            type="button"
+            onClick={() => setShowGroundTruth(s => !s)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: 11, fontWeight: 500, cursor: 'pointer',
+              color: isDark ? '#9CA3AF' : '#6B7280',
+              background: 'none', border: 'none', padding: '2px 0',
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14, transition: 'transform 0.15s', transform: showGroundTruth ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+              chevron_right
+            </span>
+            Ground Truth (optional)
+            {groundTruth && <span style={{ color: '#10B981', marginLeft: 4 }}>✓</span>}
+          </button>
+          {showGroundTruth && (
+            <input
+              type="text"
+              value={groundTruth}
+              onChange={e => setGroundTruth(e.target.value)}
+              placeholder="Paste the real headline for ROUGE-L comparison…"
+              style={{
+                width: '100%',
+                marginTop: 4,
+                padding: '6px 10px',
+                fontSize: 12,
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+                borderRadius: 6,
+                background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
+                color: isDark ? '#F8F9FF' : '#111',
+                outline: 'none',
+              }}
+            />
+          )}
+        </div>
+
         {/* ── Bottom row: Source · Author · Word count ─────── */}
         <div style={{
           display: 'flex',
@@ -186,33 +230,25 @@ export default function InputBar({ onGenerate, isGenerating }) {
           flexWrap: 'wrap',
         }}>
           {/* Source dropdown */}
-          <select
+          <CustomSelect
             id="source-select"
+            options={pubOptions}
             value={publication}
-            onChange={e => setPublication(e.target.value)}
-            style={selectStyle}
-          >
-            <option value="">Source…</option>
-            {PUBLICATIONS.map(p => (
-              <option key={p.code} value={p.code}>{p.label}</option>
-            ))}
-          </select>
+            onChange={setPublication}
+            placeholder="Source…"
+            isDark={isDark}
+          />
 
           {/* Author dropdown */}
-          <select
+          <CustomSelect
             id="author-select"
+            options={authorOptions}
             value={authorId}
-            onChange={e => setAuthorId(e.target.value)}
+            onChange={setAuthorId}
+            placeholder={loadingAuthors ? 'Loading…' : 'Author…'}
             disabled={!publication || loadingAuthors}
-            style={{ ...selectStyle, opacity: (!publication || loadingAuthors) ? 0.5 : 1 }}
-          >
-            <option value="">
-              {loadingAuthors ? 'Loading…' : 'Author…'}
-            </option>
-            {authors.map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
+            isDark={isDark}
+          />
 
           {/* Spacer */}
           <span style={{ flex: 1 }} />
@@ -236,24 +272,3 @@ export default function InputBar({ onGenerate, isGenerating }) {
     </div>
   );
 }
-
-/* Shared select style object */
-const selectStyle = {
-  height: 30,
-  padding: '0 10px',
-  borderRadius: 8,
-  border: '1px solid rgba(127,127,127,0.2)',
-  background: 'rgba(127,127,127,0.07)',
-  fontSize: 12,
-  fontWeight: 500,
-  cursor: 'pointer',
-  color: 'inherit',
-  outline: 'none',
-  transition: 'border-color 0.15s',
-  appearance: 'none',
-  WebkitAppearance: 'none',
-  paddingRight: 28,
-  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
-  backgroundRepeat: 'no-repeat',
-  backgroundPosition: 'right 8px center',
-};

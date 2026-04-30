@@ -1,26 +1,55 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useEffect, useRef, useState } from 'react';
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 export default function LoginPage() {
-  const { login, loginAsGuest } = useAuth();
+  const { loginWithGoogle, loginAsGuest } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
+  const googleBtnRef = useRef(null);
+  const [gsiLoaded, setGsiLoaded] = useState(false);
 
-  const handleGoogle = () => {
-    // TODO: wire to real Google OAuth (Firebase / Supabase / NextAuth)
-    // For now simulates a login
-    login({ id: 'google_' + Date.now(), name: 'Demo User', email: 'demo@stylevector.ai' });
-    navigate('/');
-  };
-
-  const handleMagicLink = () => {
-    // TODO: wire to real magic link flow
-    const email = prompt('Enter your email for a magic link:');
-    if (email) {
-      alert(`Magic link sent to ${email}! (simulated)`);
+  // Load Google Identity Services script
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    if (window.google?.accounts) {
+      setGsiLoaded(true);
+      return;
     }
-  };
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setGsiLoaded(true);
+    document.head.appendChild(script);
+    return () => { /* script stays loaded */ };
+  }, []);
+
+  // Initialize Google button once script is loaded
+  useEffect(() => {
+    if (!gsiLoaded || !GOOGLE_CLIENT_ID || !window.google?.accounts) return;
+
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (credentialResponse) => {
+        const user = loginWithGoogle(credentialResponse);
+        if (user) navigate('/');
+      },
+    });
+
+    // Render the Google button inside our container
+    window.google.accounts.id.renderButton(googleBtnRef.current, {
+      theme: isDark ? 'filled_black' : 'outline',
+      size: 'large',
+      width: 320,
+      text: 'continue_with',
+      shape: 'rectangular',
+      logo_alignment: 'center',
+    });
+  }, [gsiLoaded, isDark]);
 
   const handleGuest = () => {
     loginAsGuest();
@@ -59,41 +88,36 @@ export default function LoginPage() {
           <div className="w-full h-px bg-surface-container-high dark:bg-[#2a2a2a] mb-8" />
 
           {/* Auth Actions */}
-          <div className="flex flex-col gap-4 mb-6">
-            <button
-              onClick={handleGoogle}
-              className="w-full h-[44px] bg-surface-container-lowest dark:bg-[#1C1C1C] ghost-border rounded-lg flex items-center justify-center gap-3 hover:bg-surface-container-low dark:hover:bg-[#252525] transition-colors group"
-            >
-              <img
-                alt="Google"
-                className="w-5 h-5 group-hover:scale-105 transition-transform"
-                src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
-              />
-              <span className="text-[14px] font-medium text-on-surface dark:text-[#F8F9FF]">
-                Continue with Google
-              </span>
-            </button>
+          <div className="flex flex-col gap-4 mb-6 items-center">
+            {/* Google Sign-In — rendered by Google's script */}
+            {GOOGLE_CLIENT_ID ? (
+              <div ref={googleBtnRef} className="flex justify-center" />
+            ) : (
+              <p className="text-[12px] text-outline italic text-center">
+                Google sign-in not configured — set VITE_GOOGLE_CLIENT_ID
+              </p>
+            )}
+          </div>
 
-            <button
-              onClick={handleMagicLink}
-              className="w-full h-[44px] bg-surface-container-lowest dark:bg-[#1C1C1C] ghost-border rounded-lg flex items-center justify-center gap-3 hover:bg-surface-container-low dark:hover:bg-[#252525] transition-colors group"
-            >
-              <span className="material-symbols-outlined text-on-surface dark:text-[#F8F9FF] group-hover:scale-105 transition-transform" style={{ fontSize: 20 }}>
-                mail
-              </span>
-              <span className="text-[14px] font-medium text-on-surface dark:text-[#F8F9FF]">
-                Continue with Magic Link
-              </span>
-            </button>
+          {/* OR Divider */}
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex-1 h-px bg-surface-container-high dark:bg-[#2a2a2a]" />
+            <span className="text-[11px] text-outline uppercase tracking-widest">or</span>
+            <div className="flex-1 h-px bg-surface-container-high dark:bg-[#2a2a2a]" />
           </div>
 
           {/* Guest Link */}
-          <div className="text-center mt-2">
+          <div className="text-center">
             <button
               onClick={handleGuest}
-              className="text-[13px] text-primary dark:text-[#3B82F6] hover:opacity-80 transition-opacity"
+              className="w-full h-[44px] bg-surface-container-lowest dark:bg-[#1C1C1C] ghost-border rounded-lg flex items-center justify-center gap-3 hover:bg-surface-container-low dark:hover:bg-[#252525] transition-colors"
             >
-              Continue as Guest
+              <span className="material-symbols-outlined text-on-surface dark:text-[#F8F9FF]" style={{ fontSize: 20 }}>
+                person
+              </span>
+              <span className="text-[14px] font-medium text-on-surface dark:text-[#F8F9FF]">
+                Continue as Guest
+              </span>
             </button>
           </div>
         </div>

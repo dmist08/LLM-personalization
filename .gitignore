@@ -21,48 +21,33 @@ env/
 *.swo
 *~
 
-# ── Data (too large for git) ────────────────────────────
-data/raw/
-data/processed/
-data/splits/
-data/interim/
+# ── Node ────────────────────────────────────────────────
+node_modules/
+.next/
+
+# ── ML Data (too large for git) ─────────────────────────
+ml/data/
+ml/models/
+ml/checkpoints/
+ml/author_vectors/
+ml/outputs/
+ml/logs/
 *.parquet
 *.npy
 *.pkl
 *.h5
-
-# ── Models (too large for git) ──────────────────────────
-models/
 *.pt
 *.pth
 *.bin
 *.safetensors
 *.gguf
 
-# ── Checkpoints (too large for git) ─────────────────────
-checkpoints/
-# Allow LoRA adapter (small, ~70MB, needed for reproducibility)
-!checkpoints/lora/final/
+# ── Docs (keep plans + paper, ignore chat logs) ─────────
+ml/docs
 
-# ── Author Vectors (generated, regenerated per run) ─────
-author_vectors/
-
-# ── Logs ────────────────────────────────────────────────
-logs/
-*.log
-wandb/
-
-# ── Outputs (regenerated per run) ───────────────────────
-outputs/
-# Keep evaluation results (small, needed for paper)
-!outputs/evaluation/
-
-# ── Docs (KEEP — plans, research paper) ─────────────────
-# Do NOT ignore docs/ — it has the canonical project plan
-# But ignore chat log exports (large JSON)
-docs/dev_chat_logs/
-docs/COLD_START_STYLEVECTOR_V3.md
-docs/ColdStart_StyleVector_Report_IEEE.docx
+# ── Scraping artifacts ──────────────────────────────────
+ml/scraping/**/*.bak
+ml/scraping/**/*.bak.jsonl
 
 # ── OS ──────────────────────────────────────────────────
 .DS_Store
@@ -72,13 +57,21 @@ desktop.ini
 # ── Secrets ─────────────────────────────────────────────
 .env
 *.key
+client_secret*.json
+
+# ── Internal docs ───────────────────────────────────────
+docs/
 
 # ── Jupyter ─────────────────────────────────────────────
 .ipynb_checkpoints/
 
-# ── Scraping artifacts (keep code, ignore data) ─────────
-scraping/**/*.bak
-scraping/**/*.bak.jsonl
+# ── Logs ────────────────────────────────────────────────
+*.log
+wandb/
 
 # ── Antigravity agent ───────────────────────────────────
 .gemini/
+.agents/workflows/
+
+backend/load_test_results.json
+ml/scripts/temp/

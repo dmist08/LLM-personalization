@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 const FEATURE_CHIPS = [
   'Activation Steering',
   'Cold-Start Clustering',
-  '43 Indian Journalists',
+  '42 Indian Journalists',
 ];
 
 export default function HomePage() {

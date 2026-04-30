@@ -1,8 +1,8 @@
 """
 modal_app.py — Deploy the Flask backend to Modal as a persistent web endpoint.
 
-Deploy:   modal deploy modal_app.py
-Dev:      modal serve modal_app.py
+Deploy:   cd backend && modal deploy modal_app.py
+Dev:      cd backend && modal serve modal_app.py
 Logs:     modal app logs stylevector-backend
 """
 
@@ -23,7 +23,7 @@ image = (
     .add_local_dir(".", remote_path="/app")   # copies your whole backend/ folder
 )
 
-# ── Secrets — set these once with `modal secret create stylevector-secrets` ──
+# ── Secrets — env vars injected at runtime ────────────────────────────────
 secrets = [modal.Secret.from_name("stylevector-secrets")]
 
 # ── App ───────────────────────────────────────────────────────────────────
@@ -35,12 +35,14 @@ app = modal.App(
 
 
 @app.function(
-    # Keep one container warm so first request isn't cold
-    min_containers=1,
-    # Scale up to 10 on traffic spikes
-    max_containers=10,
-    # Idle timeout
+    # Scale to zero when idle (saves money)
+    min_containers=0,
+    max_containers=5,
+    # Keep container warm for 5 min after last request
     scaledown_window=300,
+    # CPU container — no GPU needed
+    cpu=1.0,
+    memory=512,
 )
 @modal.asgi_app()
 def flask_app():

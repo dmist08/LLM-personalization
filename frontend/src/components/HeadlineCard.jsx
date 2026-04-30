@@ -101,10 +101,12 @@ export default function HeadlineCard({ type, headline, rougeL, latencyMs, isLoad
         </div>
 
         <div className="flex items-center gap-2">
-          {/* ROUGE-L score (only for cold_start_sv) */}
-          {rougeL !== undefined && (
-            <span className="text-[11px] text-[#2563EB] dark:text-[#3B82F6] font-bold uppercase tracking-widest">
-              ROUGE-L {rougeL}
+          {/* ROUGE-L score */}
+          {rougeL != null && (
+            <span className={`text-[11px] font-bold uppercase tracking-widest ${
+              rougeL >= 0.3 ? 'text-[#10B981]' : rougeL >= 0.15 ? 'text-[#F59E0B]' : 'text-[#9CA3AF]'
+            }`}>
+              R-L {(rougeL * 100).toFixed(1)}%
             </span>
           )}
           {/* Latency */}

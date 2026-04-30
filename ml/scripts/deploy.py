@@ -171,8 +171,8 @@ class StyleVectorLLM:
         new_tokens = output_ids[0, inputs["input_ids"].shape[1]:]
         text = self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-        # Clean trailing garbage
-        for stop in ["\n", " Category:", " Source", " #", "  "]:
+        # Clean trailing garbage (steering can cause JSON metadata bleed)
+        for stop in ["\n", '", "', '", "date"', '", "slug"', '", "url"', " Category:", " Source", " #", "  "]:
             idx = text.find(stop)
             if idx > 5:
                 text = text[:idx]

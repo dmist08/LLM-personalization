@@ -7,8 +7,24 @@ const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const api = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 60000, // 60s — LLM calls can be slow
+  timeout: 300000, // 5min — Modal cold starts can take 90-180s
 });
+
+// ─── Warm-up ping ──────────────────────────────────────────────────────────
+// Fire-and-forget health check on page load to wake Modal containers.
+// This ensures the backend is warm by the time the user interacts.
+(async () => {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await api.get('/health', { timeout: 30000 });
+      console.log('[API] Backend is warm');
+      break;
+    } catch (err) {
+      console.log(`[API] Warm-up attempt ${attempt}/3 failed, retrying...`);
+      if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 3000));
+    }
+  }
+})();
 
 // ─── Authors ───────────────────────────────────────────────────────────────
 export const getAuthors = async (publication = null) => {
