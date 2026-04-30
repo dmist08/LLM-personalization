@@ -8,7 +8,7 @@ const TRANSITION = 'all 0.28s cubic-bezier(0.4,0,0.2,1)';
 const EXPANDED_W = 260;
 const COLLAPSED_W = 64;
 
-export default function Sidebar({ onNewChat, onCollapse }) {
+export default function Sidebar({ onNewChat, onCollapse, historyVersion = 0 }) {
   const { user, logout } = useAuth();
   const { isDark } = useTheme();
   const navigate = useNavigate();
@@ -19,11 +19,12 @@ export default function Sidebar({ onNewChat, onCollapse }) {
 
   useEffect(() => {
     if (!user) return;
+    setLoading(true);
     getChatHistory(user.id)
       .then(({ sessions }) => setSessions(sessions || []))
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
-  }, [user, activeSessionId]);
+  }, [user, activeSessionId, historyVersion]);
 
   useEffect(() => { onCollapse?.(collapsed); }, [collapsed]);
 

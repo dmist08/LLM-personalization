@@ -23,6 +23,7 @@ export default function ChatPage() {
   const [error, setError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [historyVersion, setHistoryVersion] = useState(0);
   const bottomRef = useRef(null);
 
   const sidebarW = sidebarCollapsed ? 64 : 260;
@@ -69,6 +70,7 @@ export default function ChatPage() {
           return m;
         })
       );
+      setHistoryVersion(v => v + 1); // tell Sidebar to re-fetch history
     } catch (err) {
       setError(err.response?.data?.error || 'Generation failed. Please try again.');
       setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -87,7 +89,7 @@ export default function ChatPage() {
     <div className={`${isDark ? 'dark' : ''}`}>
       <div className="bg-surface dark:bg-[#0F0F0F] text-on-surface dark:text-[#F8F9FF] h-screen flex overflow-hidden transition-colors duration-300">
 
-        <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} />
+        <Sidebar onNewChat={() => navigate('/')} onCollapse={setSidebarCollapsed} historyVersion={historyVersion} />
 
         <main
           style={{ marginLeft: sidebarW, transition: 'margin-left 0.25s cubic-bezier(0.4,0,0.2,1)' }}
