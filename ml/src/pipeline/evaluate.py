@@ -5,15 +5,9 @@ Computes ROUGE-L, METEOR, BLEU, and BERTScore for all methods and
 produces the final results table for the paper.
 
 Required installs:
-  pip install rouge-score nltk bert-score
+  pip install numpy
 
-  NLTK resources (auto-downloaded at startup):
-    wordnet, punkt, punkt_tab, omw-1.4
-
-  BERTScore model (auto-downloaded on first run, ~400MB):
-    microsoft/deberta-xlarge-mnli   (default for English)
-    — OR use --bert-model roberta-large for faster/lighter scoring.
-    The model caches to ~/.cache/huggingface/hub/
+  (No external NLP libraries needed — metrics are computed in pure Python.)
 
 METHODS EVALUATED:
   1. base          — no personalization
@@ -24,10 +18,8 @@ METHODS EVALUATED:
   6. lora_mixed    — LoRA fine-tuned on Indian + LaMP-4
 
 METRICS:
-  1. ROUGE-L (RL) — Longest common subsequence F1 (surface overlap)
-  2. METEOR (MET) — Unigram alignment with stemming + synonyms
-  3. BLEU-4 (BL)  — Modified 4-gram precision with brevity penalty
-  4. BERTScore (BS)— Contextual embedding similarity (semantic match)
+  1. ROUGE-L (RL)  — Longest common subsequence F1 (surface overlap)
+  2. Overlap (OV)  — % of reference tokens covered by hypothesis tokens
 
 RUN:
   python -m src.pipeline.evaluate
@@ -45,9 +37,6 @@ import json
 import sys
 from pathlib import Path
 
-import nltk
-for resource in ["wordnet", "punkt", "punkt_tab", "omw-1.4"]:
-    nltk.download(resource, quiet=True)
 
 import numpy as np
 
@@ -74,7 +63,7 @@ def _clean_headline(text: str) -> str:
 
 
 class Evaluator:
-    """Compute ROUGE-L, METEOR, BLEU, and BERTScore for headline generation."""
+    """Compute ROUGE-L and token overlap for headline generation."""
 
     def __init__(self, bert_model: str = "roberta-large", bert_batch_size: int = 16):
         self._rouge_scorer = None
@@ -82,13 +71,55 @@ class Evaluator:
         self._bert_batch_size = bert_batch_size
         self._bertscore_loaded = False
 
-    def _get_rouge_scorer(self):
-        if self._rouge_scorer is None:
-            from rouge_score import rouge_scorer
-            self._rouge_scorer = rouge_scorer.RougeScorer(
-                ["rougeL"], use_stemmer=True
-            )
-        return self._rouge_scorer
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """Lowercase, strip punctuation, split on whitespace — mirrors JS tokenize()."""
+        import re
+        return [t for t in re.sub(r"[^a-z0-9\s]", "", (text or "").lower()).split() if t]
+
+    @staticmethod
+    def _lcs_length(a: list[str], b: list[str]) -> int:
+        """Standard DP longest-common-subsequence length."""
+        m, n = len(a), len(b)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if a[i - 1] == b[j - 1]:
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                else:
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+        return dp[m][n]
+
+    def _compute_single(self, hypothesis: str, reference: str) -> dict:
+        """
+        Compute ROUGE-L F1 and token overlap for one hypothesis/reference pair.
+        Mirrors the JS computeMetrics() function exactly.
+          rouge_l — LCS-based F1 (0–1, rounded to 3 dp)
+          overlap — % of reference tokens covered by hypothesis (0–100, rounded to 1 dp)
+        """
+        hyp = self._tokenize(hypothesis)
+        ref = self._tokenize(reference)
+
+        if not hyp or not ref:
+            return {"rouge_l": 0.0, "overlap": 0.0}
+
+        lcs_len = self._lcs_length(hyp, ref)
+
+        precision = lcs_len / len(hyp)
+        recall    = lcs_len / len(ref)
+        rouge_l   = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        # Token overlap: how many unique ref tokens appear in hyp
+        ref_set = set(ref)
+        hyp_set = set(hyp)
+        common  = len(ref_set & hyp_set)
+        overlap = (common / len(ref)) * 100 if ref else 0.0
+
+        return {
+            "rouge_l": round(rouge_l * 1000) / 1000,   # e.g. 0.121
+            "overlap": round(overlap * 10)  / 10,        # e.g. 14.0
+        }
 
     def compute_metrics(
         self,
@@ -96,12 +127,9 @@ class Evaluator:
         references: list[str],
     ) -> dict:
         """
-        Compute all 4 metrics.
-        Returns {rouge_l, meteor, bleu, bertscore, n_samples, n_empty}.
+        Compute ROUGE-L and token overlap over a list of prediction/reference pairs.
+        Returns {rouge_l, overlap, n_samples, n_empty}.
         """
-        scorer = self._get_rouge_scorer()
-
-        # Filter valid pairs
         valid_preds = []
         valid_refs = []
         n_empty = 0
@@ -114,7 +142,7 @@ class Evaluator:
                 continue
 
             pred = _clean_headline(pred)
-            ref = _clean_headline(ref)
+            ref  = _clean_headline(ref)
 
             if not pred:
                 n_empty += 1
@@ -124,80 +152,22 @@ class Evaluator:
             valid_refs.append(ref)
 
         if not valid_preds:
-            return {
-                "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0, "bertscore": 0.0,
-                "n_samples": 0, "n_empty": n_empty,
-            }
+            return {"rouge_l": 0.0, "overlap": 0.0, "n_samples": 0, "n_empty": n_empty}
 
-        # ── ROUGE-L ──────────────────────────────────────────────────────
-        rouge_scores = []
+        # ── ROUGE-L + Token Overlap ───────────────────────────────────────
+        rouge_scores   = []
+        overlap_scores = []
         for pred, ref in zip(valid_preds, valid_refs):
-            rouge = scorer.score(ref, pred)
-            rouge_scores.append(rouge["rougeL"].fmeasure)
+            m = self._compute_single(pred, ref)
+            rouge_scores.append(m["rouge_l"])
+            overlap_scores.append(m["overlap"])
 
-        # ── METEOR ───────────────────────────────────────────────────────
-        meteor_scores = []
-        try:
-            from nltk.translate.meteor_score import single_meteor_score
-            from nltk import word_tokenize
-            for pred, ref in zip(valid_preds, valid_refs):
-                meteor = single_meteor_score(
-                    word_tokenize(ref), word_tokenize(pred)
-                )
-                meteor_scores.append(meteor)
-        except Exception as e:
-            log.warning(f"METEOR computation failed: {e}")
-
-        # ── BLEU-4 ───────────────────────────────────────────────────────
-        bleu_scores = []
-        try:
-            from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-            from nltk import word_tokenize
-            smoother = SmoothingFunction().method1
-            for pred, ref in zip(valid_preds, valid_refs):
-                ref_tokens = word_tokenize(ref.lower())
-                pred_tokens = word_tokenize(pred.lower())
-                # sentence-level BLEU-4 with smoothing
-                score = sentence_bleu(
-                    [ref_tokens], pred_tokens,
-                    weights=(0.25, 0.25, 0.25, 0.25),
-                    smoothing_function=smoother,
-                )
-                bleu_scores.append(score)
-        except Exception as e:
-            log.warning(f"BLEU computation failed: {e}")
-
-        # ── BERTScore ────────────────────────────────────────────────────
-        bertscore_scores = []
-        try:
-            from bert_score import score as bert_score_fn
-            # BERTScore computes in batch — much faster than per-sample
-            P, R, F1 = bert_score_fn(
-                valid_preds, valid_refs,
-                model_type=self._bert_model,
-                lang="en",
-                verbose=not self._bertscore_loaded,
-                batch_size=self._bert_batch_size,
-            )
-            bertscore_scores = F1.tolist()
-            self._bertscore_loaded = True
-        except ImportError:
-            log.warning(
-                "bert-score not installed. Install with: pip install bert-score\n"
-                "BERTScore will be 0.0 in results."
-            )
-        except Exception as e:
-            log.warning(f"BERTScore computation failed: {e}")
-
-        result = {
-            "rouge_l": round(float(np.mean(rouge_scores)), 4) if rouge_scores else 0.0,
-            "meteor": round(float(np.mean(meteor_scores)), 4) if meteor_scores else 0.0,
-            "bleu": round(float(np.mean(bleu_scores)), 4) if bleu_scores else 0.0,
-            "bertscore": round(float(np.mean(bertscore_scores)), 4) if bertscore_scores else 0.0,
+        return {
+            "rouge_l": round(float(np.mean(rouge_scores)),   4),
+            "overlap": round(float(np.mean(overlap_scores)), 4),
             "n_samples": len(valid_preds),
-            "n_empty": n_empty,
+            "n_empty":   n_empty,
         }
-        return result
 
     def evaluate_method(
         self,
@@ -233,7 +203,7 @@ class Evaluator:
         for group_name, pairs in groups.items():
             if not pairs:
                 results[group_name] = {
-                    "rouge_l": 0.0, "meteor": 0.0, "bleu": 0.0, "bertscore": 0.0,
+                    "rouge_l": 0.0, "overlap": 0.0,
                     "n_samples": 0, "n_empty": 0,
                 }
                 continue
@@ -263,15 +233,15 @@ class Evaluator:
             "lora_mixed": "LoRA (Mixed)",
         }
 
-        metric_keys = ["rouge_l", "bleu", "meteor", "bertscore"]
-        metric_short = {"rouge_l": "RL", "bleu": "BL", "meteor": "MET", "bertscore": "BS"}
+        metric_keys = ["rouge_l", "overlap"]
+        metric_short = {"rouge_l": "RL", "overlap": "OV"}
 
         col_groups = ["all", "rich", "mid", "sparse"]
         header_names = {"all": "All", "rich": "Rich", "mid": "Mid", "sparse": "Sparse"}
 
         # ── ASCII table ──────────────────────────────────────────────────
         # Each group has 4 metrics: RL, BL, MET, BS
-        col_width = 4 * 7 + 3  # 4 values × 7 chars + 3 spaces = 31
+        col_width = 2 * 7 + 1  # 2 values × 7 chars + 1 space = 15
         header1 = f"{'Method':<28}"
         header2 = f"{'':28}"
         for g in col_groups:
@@ -337,7 +307,7 @@ class Evaluator:
         latex_lines = [
             r"\begin{table*}[h]",
             r"\centering",
-            r"\caption{Headline Generation Results — ROUGE-L, BLEU-4, METEOR, BERTScore}",
+            r"\caption{Headline Generation Results — ROUGE-L and Token Overlap}",
             r"\label{tab:results}",
             f"\\begin{{tabular}}{{{col_spec}}}",
             r"\hline",
@@ -394,7 +364,7 @@ class Evaluator:
         log.info(f"\nSaved tables to {output_dir}/:")
         log.info(f"  result_table.txt  (ASCII)")
         log.info(f"  result_table.json (JSON)")
-        log.info(f"  result_table.tex  (LaTeX — best values auto-bolded)")
+        log.info(f"  result_table.tex  (LaTeX — best values auto-bolded, RL & OV)")
 
         # ── Key result check ─────────────────────────────────────────────
         if "cold_start" in results and "stylevector" in results:
@@ -456,7 +426,7 @@ def main():
     args = parser.parse_args()
 
     log.info("=" * 60)
-    log.info("EVALUATION — ROUGE-L, BLEU-4, METEOR, BERTScore")
+    log.info("EVALUATION — ROUGE-L, Token Overlap")
     log.info("=" * 60)
 
     metadata = load_json(Path(args.metadata)) if Path(args.metadata).exists() else {}
@@ -554,9 +524,7 @@ def main():
         all_r = r.get("all", {})
         log.info(
             f"  {method:<20}: RL={all_r.get('rouge_l', 0):.4f}  "
-            f"BL={all_r.get('bleu', 0):.4f}  "
-            f"MET={all_r.get('meteor', 0):.4f}  "
-            f"BS={all_r.get('bertscore', 0):.4f}  "
+            f"OV={all_r.get('overlap', 0):.4f}  "
             f"(n={all_r.get('n_samples', 0):,})"
         )
 
